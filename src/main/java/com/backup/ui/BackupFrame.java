@@ -1,16 +1,15 @@
 package com.backup.ui;
 
+import com.backup.automation.BackupTaskGate;
 import com.backup.automation.ScheduledBackupRunner;
 import com.backup.automation.WatchBackupService;
 import com.backup.core.BackupManifest;
+import com.backup.core.BackupFilter;
+import com.backup.core.RestoreResult;
 import com.backup.core.BackupOptions;
 import com.backup.core.BackupResult;
 import com.backup.core.BackupService;
 import com.backup.core.CompressionType;
-import com.backup.network.HttpBackupClient;
-import com.backup.network.HttpBackupServer;
-import com.backup.network.SocketBackupClient;
-import com.backup.network.SocketBackupServer;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -48,13 +47,13 @@ import java.awt.RenderingHints;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.ResolverStyle;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class BackupFrame extends JFrame {
     private static final DateTimeFormatter LOG_TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -74,11 +73,9 @@ public final class BackupFrame extends JFrame {
     private static final Font TITLE_FONT = new Font("SansSerif", Font.BOLD, 20);
 
     private final BackupService backupService = new BackupService();
-    private final HttpBackupClient httpBackupClient = new HttpBackupClient();
-    private final SocketBackupClient socketBackupClient = new SocketBackupClient();
     private final ScheduledBackupRunner scheduledBackupRunner = new ScheduledBackupRunner();
     private final WatchBackupService watchBackupService = new WatchBackupService();
-    private final AtomicBoolean backupRunning = new AtomicBoolean(false);
+    private final BackupTaskGate taskGate = new BackupTaskGate(SwingUtilities::invokeLater);
 
     private final JTextField sourceField = new JTextField(34);
     private final JTextField destinationField = new JTextField(34);
@@ -87,9 +84,19 @@ public final class BackupFrame extends JFrame {
     private final JCheckBox incrementalCheckBox = new JCheckBox("Incremental backup", true);
     private final JCheckBox encryptedCheckBox = new JCheckBox("Encrypt archive");
     private final JPasswordField passphraseField = new JPasswordField(20);
-    private final JTextField httpUploadUriField = new JTextField(34);
-    private final JTextField socketHostField = new JTextField(18);
-    private final JSpinner socketPortSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 65535, 1));
+    private final JTextField includePathsField = new JTextField(34);
+    private final JTextField excludePathsField = new JTextField(34);
+    private final JTextField extensionsField = new JTextField(34);
+    private final JCheckBox extensionlessCheckBox = new JCheckBox("Include extensionless files (alone selects only extensionless)");
+    private final JTextField namesField = new JTextField(34);
+    private final JTextField modifiedAfterField = new JTextField(20);
+    private final JTextField modifiedBeforeField = new JTextField(20);
+    private final JTextField minBytesField = new JTextField(20);
+    private final JTextField maxBytesField = new JTextField(20);
+    private final JSpinner keepGroupsSpinner = new JSpinner(new SpinnerNumberModel(0, 0, Integer.MAX_VALUE, 1));
+    private final JButton restoreButton = new JButton("Restore");
+    private static final DateTimeFormatter FILTER_TIME = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")
+            .withResolverStyle(ResolverStyle.STRICT);
 
     private final JTextField restoreArchiveField = new JTextField(34);
     private final JTextField restoreDestinationField = new JTextField(34);
@@ -99,16 +106,8 @@ public final class BackupFrame extends JFrame {
     private final JSpinner watchDebounceSecondsSpinner = new JSpinner(new SpinnerNumberModel(5, 1, 600, 1));
     private final JButton scheduleButton = new JButton("Start schedule");
     private final JButton watchButton = new JButton("Start realtime backup");
-    private BackupRequest scheduledRequest;
-    private BackupRequest watchedRequest;
-
-    private final JTextField serverUploadDirectoryField = new JTextField(34);
-    private final JSpinner httpServerPortSpinner = new JSpinner(new SpinnerNumberModel(9090, 0, 65535, 1));
-    private final JSpinner socketServerPortSpinner = new JSpinner(new SpinnerNumberModel(7070, 0, 65535, 1));
-    private final JButton httpServerButton = new JButton("Start HTTP server");
-    private final JButton socketServerButton = new JButton("Start socket server");
-    private HttpBackupServer httpBackupServer;
-    private SocketBackupServer socketBackupServer;
+    private volatile BackupOptions scheduledRequest;
+    private volatile BackupOptions watchedRequest;
 
     private final JButton backupButton = new JButton("Back up now");
     private final JTextArea logArea = new JTextArea(10, 80);
@@ -129,7 +128,6 @@ public final class BackupFrame extends JFrame {
         tabs.addTab("Backup", scrollablePage(createBackupPanel()));
         tabs.addTab("Restore", scrollablePage(createRestorePanel()));
         tabs.addTab("Automation", scrollablePage(createAutomationPanel()));
-        tabs.addTab("Network", scrollablePage(createNetworkPanel()));
         tabs.setFont(new Font("SansSerif", Font.BOLD, 13));
         tabs.setForeground(INK);
         tabs.setBackground(WINDOW_BACKGROUND);
@@ -194,7 +192,7 @@ public final class BackupFrame extends JFrame {
     }
 
     private JPanel createBackupPanel() {
-        JPanel panel = pagePanel("BACKUP", "Create a protected snapshot", "Package your files locally, then optionally send the archive to a remote receiver.");
+        JPanel panel = pagePanel("BACKUP", "Create a protected snapshot", "Package and protect your files in a local backup archive.");
         JPanel form = formPanel("Backup settings");
         int row = 0;
         addPathRow(form, row++, "Source directory", sourceField, true);
@@ -204,19 +202,83 @@ public final class BackupFrame extends JFrame {
         addRow(form, row++, "", incrementalCheckBox);
         addRow(form, row++, "", encryptedCheckBox);
         addRow(form, row++, "Passphrase", passphraseField);
-        addRow(form, row++, "HTTP upload URL", httpUploadUriField);
-        addSocketUploadRow(form, row++);
+        addRow(form, row++, "", createFilterPanel());
         stylePrimaryButton(backupButton);
         addActionRow(form, row, backupButton);
         backupButton.addActionListener(event -> {
             try {
-                runBackupAsync("Manual", buildBackupRequestFromFields());
+                runBackupAsync("Manual", buildBackupOptionsFromFields());
             } catch (RuntimeException e) {
                 showError("Invalid backup settings", e.getMessage());
             }
         });
         panel.add(form, BorderLayout.CENTER);
         return panel;
+    }
+
+    private JPanel createFilterPanel() {
+        JPanel container = new JPanel(new BorderLayout(0, 6));
+        container.setOpaque(false);
+        JButton toggle = new JButton("Show file filters");
+        styleSecondaryButton(toggle);
+        JPanel filters = new JPanel(new GridBagLayout());
+        filters.setOpaque(false);
+        int row = 0;
+        addRow(filters, row++, "Include paths", includePathsField);
+        addRow(filters, row++, "Exclude paths", excludePathsField);
+        addRow(filters, row++, "Extensions", extensionsField);
+        addRow(filters, row++, "", extensionlessCheckBox);
+        addRow(filters, row++, "Names", namesField);
+        addRow(filters, row++, "Modified at or after", modifiedAfterField);
+        addRow(filters, row++, "Modified at or before", modifiedBeforeField);
+        addRow(filters, row++, "Minimum bytes", minBytesField);
+        addRow(filters, row++, "Maximum bytes", maxBytesField);
+        addRow(filters, row, "Filter rules", new JLabel("<html>Leave blank for all files. Separate alternatives with ; — conditions intersect.<br>Paths use / and glob patterns, e.g. docs/**; names match the basename.<br>Extensions ignore case, e.g. txt;pdf. Excluded directories are not scanned.<br>Dates: yyyy-MM-dd HH:mm:ss, local time; dates and sizes include both boundaries.<br>Links are filtered by their own path, name, modification time and recorded size; targets are not read.</html>"));
+        filters.setVisible(false);
+        toggle.addActionListener(event -> {
+            filters.setVisible(!filters.isVisible());
+            toggle.setText(filters.isVisible() ? "Hide file filters" : "Show file filters");
+            container.revalidate();
+        });
+        container.add(toggle, BorderLayout.NORTH);
+        container.add(filters, BorderLayout.CENTER);
+        return container;
+    }
+
+    private static Long parseFilterTime(JTextField field, String label) {
+        String value = field.getText().strip();
+        if (value.isEmpty()) return null;
+        try {
+            LocalDateTime local = LocalDateTime.parse(value, FILTER_TIME);
+            var offsets = ZoneId.systemDefault().getRules().getValidOffsets(local);
+            if (offsets.isEmpty()) throw new IllegalArgumentException("Time does not exist in local timezone");
+            return local.toInstant(offsets.getFirst()).toEpochMilli();
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException(label + " must be a valid local yyyy-MM-dd HH:mm:ss date.", e);
+        }
+    }
+
+    private static Long parseBytes(JTextField field, String label) {
+        String value = field.getText().strip();
+        if (value.isEmpty()) return null;
+        try {
+            long bytes = Long.parseLong(value);
+            if (bytes < 0) throw new NumberFormatException();
+            return bytes;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(label + " must be a nonnegative whole byte count.", e);
+        }
+    }
+
+    private void setTaskControlsEnabled(boolean enabled) {
+        backupButton.setEnabled(enabled);
+        restoreButton.setEnabled(enabled);
+    }
+
+    private static String snapshotDescription(BackupManifest manifest) {
+        var snapshot = manifest.snapshot();
+        return "Backup group " + snapshot.groupId() + ", sequence " + snapshot.sequence()
+                + ", parent " + (snapshot.parentId() == null || snapshot.parentId().isBlank() ? "full baseline" : snapshot.parentId()) + ".";
     }
 
     private JPanel createRestorePanel() {
@@ -226,7 +288,7 @@ public final class BackupFrame extends JFrame {
         addPathRow(form, row++, "Archive file", restoreArchiveField, false);
         addPathRow(form, row++, "Restore destination", restoreDestinationField, true);
         addRow(form, row++, "Passphrase", restorePassphraseField);
-        JButton restoreButton = new JButton("Restore");
+        addRow(form, row++, "Restore order", new JLabel("<html>Restore full backup first, then increments in sequence into the same destination.<br>Deleted source files are not automatically removed. For an exact full snapshot, restore into an empty directory.<br>Read-only directories may require a manual permission adjustment before the next increment.</html>"));
         stylePrimaryButton(restoreButton);
         restoreButton.addActionListener(event -> {
             try {
@@ -244,6 +306,8 @@ public final class BackupFrame extends JFrame {
         JPanel panel = pagePanel("AUTOMATION", "Let Backup keep watch", "Run a recurring backup or react to changes in your source directory.");
         JPanel form = formPanel("Automation");
         int row = 0;
+        addRow(form, row++, "Keep latest backup groups", keepGroupsSpinner);
+        addRow(form, row++, "Retention", new JLabel("<html>0 disables cleanup. A group contains one full backup and its increments.<br>At most 10 snapshots per group; dependent archives are kept together.<br>Start schedule/watch again after changing backup settings to use a new options snapshot.</html>"));
         addRow(form, row++, "Schedule minutes", scheduleMinutesSpinner);
         scheduleButton.addActionListener(event -> toggleSchedule());
         styleSecondaryButton(scheduleButton);
@@ -252,23 +316,6 @@ public final class BackupFrame extends JFrame {
         watchButton.addActionListener(event -> toggleWatch());
         styleSecondaryButton(watchButton);
         addActionRow(form, row, watchButton);
-        panel.add(form, BorderLayout.CENTER);
-        return panel;
-    }
-
-    private JPanel createNetworkPanel() {
-        JPanel panel = pagePanel("NETWORK", "Receive archives over the wire", "Start a lightweight HTTP or socket receiver for another Backup instance to upload into.");
-        JPanel form = formPanel("Network receivers");
-        int row = 0;
-        addPathRow(form, row++, "Upload directory", serverUploadDirectoryField, true);
-        addRow(form, row++, "HTTP server port", httpServerPortSpinner);
-        httpServerButton.addActionListener(event -> toggleHttpServer());
-        styleSecondaryButton(httpServerButton);
-        addActionRow(form, row++, httpServerButton);
-        addRow(form, row++, "Socket server port", socketServerPortSpinner);
-        socketServerButton.addActionListener(event -> toggleSocketServer());
-        styleSecondaryButton(socketServerButton);
-        addActionRow(form, row, socketServerButton);
         panel.add(form, BorderLayout.CENTER);
         return panel;
     }
@@ -368,16 +415,6 @@ public final class BackupFrame extends JFrame {
         addRow(panel, row, label, container);
     }
 
-    private void addSocketUploadRow(JPanel panel, int row) {
-        JPanel container = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        container.setOpaque(false);
-        container.add(fieldHint("Host"));
-        container.add(socketHostField);
-        container.add(fieldHint("Port"));
-        container.add(socketPortSpinner);
-        addRow(panel, row, "Socket upload", container);
-    }
-
     private void addActionRow(JPanel panel, int row, JButton button) {
         GridBagConstraints constraints = constraints(1, row);
         constraints.anchor = GridBagConstraints.WEST;
@@ -416,7 +453,7 @@ public final class BackupFrame extends JFrame {
         }
     }
 
-    private BackupRequest buildBackupRequestFromFields() {
+    private BackupOptions buildBackupOptionsFromFields() {
         BackupOptions options = new BackupOptions(
                 Path.of(sourceField.getText().trim()),
                 Path.of(destinationField.getText().trim()),
@@ -424,37 +461,50 @@ public final class BackupFrame extends JFrame {
                 (CompressionType) compressionCombo.getSelectedItem(),
                 incrementalCheckBox.isSelected(),
                 encryptedCheckBox.isSelected(),
-                passphraseField.getPassword()
+                passphraseField.getPassword(),
+                new BackupFilter(includePathsField.getText(), excludePathsField.getText(),
+                        extensionsField.getText(), extensionlessCheckBox.isSelected(), namesField.getText(),
+                        parseFilterTime(modifiedAfterField, "Earliest modified time"),
+                        parseFilterTime(modifiedBeforeField, "Latest modified time"),
+                        parseBytes(minBytesField, "Minimum size"), parseBytes(maxBytesField, "Maximum size")),
+                ((Number) keepGroupsSpinner.getValue()).intValue()
         );
-        URI httpUploadUri = httpUploadUriField.getText().isBlank() ? null : URI.create(httpUploadUriField.getText().trim());
-        String socketHost = socketHostField.getText().trim();
-        int socketPort = (Integer) socketPortSpinner.getValue();
-        return new BackupRequest(options, httpUploadUri, socketHost, socketPort);
+        return options;
     }
 
-    private void runBackupAsync(String label, BackupRequest request) {
-        if (request == null) {
-            return;
+    private void runBackupAsync(String label, BackupOptions request) {
+        if (request == null) return;
+        Runnable starter = () -> {
+            if (!"Manual".equals(label)
+                    && request != ("Scheduled".equals(label) ? scheduledRequest : watchedRequest)) {
+                taskGate.complete();
+                return;
+            }
+            startBackupWorker(label, request);
+        };
+        if ("Manual".equals(label)) {
+            if (!taskGate.submitManual(starter)) {
+                log("Backup unavailable while a backup or restore is running.");
+                JOptionPane.showMessageDialog(this, "A backup or restore is running. Please wait for completion.");
+            }
+        } else {
+            taskGate.submitAutomatic(request, starter);
         }
-        if (!backupRunning.compareAndSet(false, true)) {
-            log(label + " backup skipped because another backup is running.");
-            updateStatus("Busy", WARNING);
-            return;
-        }
-        backupButton.setEnabled(false);
+    }
+
+    private void startBackupWorker(String label, BackupOptions request) {
+        setTaskControlsEnabled(false);
         updateStatus("Backing up", PRIMARY);
         new SwingWorker<BackupResult, String>() {
             @Override
             protected BackupResult doInBackground() throws Exception {
                 publish(label + " backup started.");
-                BackupResult result = backupService.backup(request.options());
-                if (request.httpUploadUri() != null) {
-                    publish("Uploading archive over HTTP...");
-                    httpBackupClient.upload(result.archivePath(), request.httpUploadUri());
-                }
-                if (!request.socketHost().isBlank() && request.socketPort() > 0) {
-                    publish("Uploading archive over socket...");
-                    socketBackupClient.upload(result.archivePath(), request.socketHost(), request.socketPort());
+                BackupResult result = backupService.backup(request);
+                try {
+                    BackupManifest manifest = BackupManifest.load(result.manifestPath());
+                    if (manifest.snapshot() != null) publish(snapshotDescription(manifest));
+                } catch (IOException e) {
+                    publish("Could not read snapshot details: " + e.getMessage());
                 }
                 return result;
             }
@@ -466,17 +516,18 @@ public final class BackupFrame extends JFrame {
 
             @Override
             protected void done() {
-                backupRunning.set(false);
-                backupButton.setEnabled(true);
                 try {
                     BackupResult result = get();
-                    log("%s backup complete: %s (%d archived entries, %,d bytes).".formatted(
+                    log("%s backup complete: %s (%d archived entries, %,d bytes, %d warnings).".formatted(
                             label,
                             result.archivePath(),
                             result.archivedEntries(),
-                            result.archivedBytes()
+                            result.archivedBytes(),
+                            result.warnings().size()
                     ));
-                    updateStatus("Ready", SUCCESS);
+                    result.warnings().forEach(warning -> log("Warning: " + warning));
+                    updateStatus(result.warnings().isEmpty() ? "Ready" : result.warnings().size() + " warnings",
+                            result.warnings().isEmpty() ? SUCCESS : WARNING);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     log(label + " backup interrupted.");
@@ -485,6 +536,9 @@ public final class BackupFrame extends JFrame {
                     log(label + " backup failed: " + rootMessage(e));
                     updateStatus("Backup failed", DANGER);
                     showError("Backup failed", rootMessage(e));
+                } finally {
+                    setTaskControlsEnabled(true);
+                    taskGate.complete();
                 }
             }
         }.execute();
@@ -494,12 +548,20 @@ public final class BackupFrame extends JFrame {
         Path archive = Path.of(restoreArchiveField.getText().trim());
         Path destination = Path.of(restoreDestinationField.getText().trim());
         char[] passphrase = restorePassphraseField.getPassword();
+        if (!taskGate.submitManual(() -> startRestoreWorker(archive, destination, passphrase))) {
+            log("Restore unavailable while a backup or restore is running.");
+            JOptionPane.showMessageDialog(this, "A backup or restore is running. Please wait for completion.");
+        }
+    }
+
+    private void startRestoreWorker(Path archive, Path destination, char[] passphrase) {
+        setTaskControlsEnabled(false);
         updateStatus("Restoring", PRIMARY);
-        new SwingWorker<BackupManifest, String>() {
+        new SwingWorker<RestoreResult, String>() {
             @Override
-            protected BackupManifest doInBackground() throws Exception {
+            protected RestoreResult doInBackground() throws Exception {
                 publish("Restore started.");
-                return backupService.restore(archive, destination, passphrase);
+                return backupService.restoreDetailed(archive, destination, passphrase);
             }
 
             @Override
@@ -510,9 +572,13 @@ public final class BackupFrame extends JFrame {
             @Override
             protected void done() {
                 try {
-                    BackupManifest manifest = get();
-                    log("Restore complete: " + manifest.entries().size() + " manifest entries restored.");
-                    updateStatus("Ready", SUCCESS);
+                    RestoreResult result = get();
+                    BackupManifest manifest = result.manifest();
+                    log("Restore complete: " + manifest.entries().size() + " manifest entries, " + result.warnings().size() + " warnings.");
+                    if (manifest.snapshot() != null) log(snapshotDescription(manifest));
+                    result.warnings().forEach(warning -> log("Warning: " + warning));
+                    updateStatus(result.warnings().isEmpty() ? "Ready" : result.warnings().size() + " warnings",
+                            result.warnings().isEmpty() ? SUCCESS : WARNING);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     log("Restore interrupted.");
@@ -521,6 +587,10 @@ public final class BackupFrame extends JFrame {
                     log("Restore failed: " + rootMessage(e));
                     updateStatus("Restore failed", DANGER);
                     showError("Restore failed", rootMessage(e));
+                } finally {
+                    java.util.Arrays.fill(passphrase, '\0');
+                    setTaskControlsEnabled(true);
+                    taskGate.complete();
                 }
             }
         }.execute();
@@ -529,6 +599,9 @@ public final class BackupFrame extends JFrame {
     private void toggleSchedule() {
         if (scheduledBackupRunner.isRunning()) {
             scheduledBackupRunner.stop();
+            BackupOptions stopped = scheduledRequest;
+            scheduledRequest = null;
+            if (stopped != null) taskGate.cancelAutomatic(stopped);
             scheduleButton.setText("Start schedule");
             styleSecondaryButton(scheduleButton);
             updateStatus("Ready", SUCCESS);
@@ -536,13 +609,14 @@ public final class BackupFrame extends JFrame {
             return;
         }
         try {
-            scheduledRequest = buildBackupRequestFromFields();
+            scheduledRequest = buildBackupOptionsFromFields();
         } catch (RuntimeException e) {
             showError("Invalid backup settings", e.getMessage());
             return;
         }
         long minutes = ((Number) scheduleMinutesSpinner.getValue()).longValue();
-        scheduledBackupRunner.start(Duration.ofMinutes(minutes), () -> runBackupAsync("Scheduled", scheduledRequest));
+        BackupOptions request = scheduledRequest;
+        scheduledBackupRunner.start(Duration.ofMinutes(minutes), () -> runBackupAsync("Scheduled", request));
         scheduleButton.setText("Stop schedule");
         styleWarningButton(scheduleButton);
         updateStatus("Scheduled", PRIMARY_DARK);
@@ -552,6 +626,9 @@ public final class BackupFrame extends JFrame {
     private void toggleWatch() {
         if (watchBackupService.isRunning()) {
             watchBackupService.stop();
+            BackupOptions stopped = watchedRequest;
+            watchedRequest = null;
+            if (stopped != null) taskGate.cancelAutomatic(stopped);
             watchButton.setText("Start realtime backup");
             styleSecondaryButton(watchButton);
             updateStatus("Ready", SUCCESS);
@@ -559,12 +636,13 @@ public final class BackupFrame extends JFrame {
             return;
         }
         try {
-            watchedRequest = buildBackupRequestFromFields();
+            watchedRequest = buildBackupOptionsFromFields();
             long seconds = ((Number) watchDebounceSecondsSpinner.getValue()).longValue();
+            BackupOptions request = watchedRequest;
             watchBackupService.start(
-                    watchedRequest.options().sourceDirectory(),
+                    request.sourceDirectory(),
                     Duration.ofSeconds(seconds),
-                    () -> runBackupAsync("Realtime", watchedRequest),
+                    () -> runBackupAsync("Realtime", request),
                     message -> SwingUtilities.invokeLater(() -> log(message))
             );
             watchButton.setText("Stop realtime backup");
@@ -576,66 +654,6 @@ public final class BackupFrame extends JFrame {
             updateStatus("Watch failed", DANGER);
             showError("Realtime backup failed", e.getMessage());
         }
-    }
-
-    private void toggleHttpServer() {
-        if (httpBackupServer != null) {
-            httpBackupServer.close();
-            httpBackupServer = null;
-            httpServerButton.setText("Start HTTP server");
-            styleSecondaryButton(httpServerButton);
-            updateStatus("Ready", SUCCESS);
-            log("HTTP server stopped.");
-            return;
-        }
-        try {
-            Path uploadDirectory = uploadDirectoryFromField();
-            int port = (Integer) httpServerPortSpinner.getValue();
-            httpBackupServer = HttpBackupServer.startHttp(port, uploadDirectory);
-            httpServerButton.setText("Stop HTTP server");
-            styleWarningButton(httpServerButton);
-            updateStatus("HTTP online", PRIMARY_DARK);
-            log("HTTP server listening on /upload at port " + httpBackupServer.port() + ".");
-        } catch (IOException | RuntimeException e) {
-            log("HTTP server failed: " + e.getMessage());
-            updateStatus("HTTP failed", DANGER);
-            showError("HTTP server failed", e.getMessage());
-        }
-    }
-
-    private void toggleSocketServer() {
-        if (socketBackupServer != null) {
-            socketBackupServer.close();
-            socketBackupServer = null;
-            socketServerButton.setText("Start socket server");
-            styleSecondaryButton(socketServerButton);
-            updateStatus("Ready", SUCCESS);
-            log("Socket server stopped.");
-            return;
-        }
-        try {
-            Path uploadDirectory = uploadDirectoryFromField();
-            int port = (Integer) socketServerPortSpinner.getValue();
-            socketBackupServer = SocketBackupServer.start(port, uploadDirectory);
-            socketServerButton.setText("Stop socket server");
-            styleWarningButton(socketServerButton);
-            updateStatus("Socket online", PRIMARY_DARK);
-            log("Socket server listening at port " + socketBackupServer.port() + ".");
-        } catch (IOException | RuntimeException e) {
-            log("Socket server failed: " + e.getMessage());
-            updateStatus("Socket failed", DANGER);
-            showError("Socket server failed", e.getMessage());
-        }
-    }
-
-    private Path uploadDirectoryFromField() {
-        if (serverUploadDirectoryField.getText().isBlank()) {
-            if (!destinationField.getText().isBlank()) {
-                return Path.of(destinationField.getText().trim()).resolve("incoming");
-            }
-            throw new IllegalArgumentException("Upload directory is required.");
-        }
-        return Path.of(serverUploadDirectoryField.getText().trim());
     }
 
     private String rootMessage(ExecutionException e) {
@@ -661,24 +679,9 @@ public final class BackupFrame extends JFrame {
     }
 
     private void shutdown() {
+        taskGate.close();
         scheduledBackupRunner.close();
         watchBackupService.close();
-        if (httpBackupServer != null) {
-            httpBackupServer.close();
-        }
-        if (socketBackupServer != null) {
-            socketBackupServer.close();
-        }
-    }
-
-    private record BackupRequest(BackupOptions options, URI httpUploadUri, String socketHost, int socketPort) {
-    }
-
-    private JLabel fieldHint(String text) {
-        JLabel label = new JLabel(text);
-        label.setFont(LABEL_FONT);
-        label.setForeground(MUTED);
-        return label;
     }
 
     private void styleFormComponent(Component component) {
