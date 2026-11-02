@@ -11,9 +11,18 @@ public record BackupOptions(
         CompressionType compressionType,
         boolean incremental,
         boolean encrypted,
-        char[] passphrase
+        char[] passphrase,
+        BackupFilter filter,
+        int keepGroups
 ) {
+    public BackupOptions(Path source, Path destination, String name, CompressionType compression,
+                         boolean incremental, boolean encrypted, char[] password) {
+        this(source, destination, name, compression, incremental, encrypted, password, BackupFilter.all(), 0);
+    }
+
     public BackupOptions {
+        filter = filter == null ? BackupFilter.all() : filter;
+        if (keepGroups < 0) throw new IllegalArgumentException("Retained group count must not be negative");
         Objects.requireNonNull(sourceDirectory, "sourceDirectory");
         Objects.requireNonNull(destinationDirectory, "destinationDirectory");
         compressionType = compressionType == null ? CompressionType.ZIP : compressionType;

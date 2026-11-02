@@ -65,10 +65,10 @@ class BackupServiceTest {
         Files.writeString(source.resolve("changed.txt"), "before");
 
         BackupService service = new BackupService();
-        service.backup(new BackupOptions(source, destination, "full", CompressionType.ZIP, false, false, new char[0]));
+        service.backup(new BackupOptions(source, destination, "test", CompressionType.ZIP, false, false, new char[0]));
         Files.writeString(source.resolve("changed.txt"), "after");
         BackupResult result = service.backup(new BackupOptions(
-                source, destination, "incremental", CompressionType.ZIP, true, false, new char[0]
+                source, destination, "test", CompressionType.ZIP, true, false, new char[0]
         ));
 
         List<String> entries;
