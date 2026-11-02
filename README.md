@@ -90,3 +90,6 @@ Destination symlinks are refused. Regular files are replaced atomically so an ex
 outside the restore directory does not have its contents overwritten.
 
 
+## Presentation handoff
+
+See [Claude Code PPT 制作说明](doc/Claude-Code-PPT制作说明.md) for the verified project facts, two-minute slide plan, screenshots, and eight-minute demonstration flow.
