@@ -1,85 +1,83 @@
 package com.backup.core;
 
 import java.io.IOException;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
-import java.nio.file.LinkOption;
-import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.nio.file.attribute.FileOwnerAttributeView;
-import java.nio.file.attribute.PosixFileAttributes;
-import java.nio.file.attribute.PosixFilePermissions;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.nio.file.*;
+import java.nio.file.attribute.*;
+import java.util.*;
+import java.util.function.Consumer;
 
 public final class FileScanner {
     public List<BackupEntry> scan(Path root) throws IOException {
-        Path normalizedRoot = root.toAbsolutePath().normalize();
-        if (!Files.isDirectory(normalizedRoot)) {
-            throw new IOException("Source is not a directory: " + normalizedRoot);
-        }
+        return scan(root, BackupFilter.all(), ignored -> {});
+    }
 
-        List<BackupEntry> entries = new ArrayList<>();
+    public List<BackupEntry> scan(Path root, BackupFilter filter, Consumer<String> warnings) throws IOException {
+        Path normalizedRoot = root.toRealPath();
+        if (!Files.isDirectory(normalizedRoot)) throw new IOException("Source is not a directory: " + root);
+        Map<String, RawEntry> raw = new TreeMap<>();
         Files.walkFileTree(normalizedRoot, new SimpleFileVisitor<>() {
-            @Override
-            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-                if (!normalizedRoot.equals(dir)) {
-                    entries.add(toEntry(normalizedRoot, dir, attrs, true));
+            @Override public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                if (!dir.equals(normalizedRoot)) {
+                    String relative = relative(normalizedRoot, dir);
+                    if (filter.excludesDirectory(relative)) return FileVisitResult.SKIP_SUBTREE;
+                    raw.put(relative, capture(dir, relative, attrs));
                 }
                 return FileVisitResult.CONTINUE;
             }
-
-            @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                if (attrs.isRegularFile()) {
-                    entries.add(toEntry(normalizedRoot, file, attrs, false));
+            @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                String relative = relative(normalizedRoot, file);
+                if (!attrs.isRegularFile() && !attrs.isSymbolicLink()) {
+                    warnings.accept("Skipped unsupported special file: " + relative);
+                } else if (filter.matches(relative, attrs.size(), attrs.lastModifiedTime().toMillis())) {
+                    raw.put(relative, capture(file, relative, attrs));
                 }
                 return FileVisitResult.CONTINUE;
             }
         });
-        entries.sort(Comparator.comparing(BackupEntry::relativePath));
-        return entries;
-    }
-
-    private BackupEntry toEntry(Path root, Path path, BasicFileAttributes attrs, boolean directory) throws IOException {
-        PosixMetadata posixMetadata = readPosixMetadata(path);
-        String relativePath = root.relativize(path.toAbsolutePath().normalize()).toString().replace('\\', '/');
-        return new BackupEntry(
-                relativePath,
-                directory,
-                directory ? 0 : attrs.size(),
-                attrs.lastModifiedTime().toMillis(),
-                directory ? "" : HashUtils.sha256(path),
-                posixMetadata.permissions(),
-                posixMetadata.owner(),
-                posixMetadata.group()
-        );
-    }
-
-    private PosixMetadata readPosixMetadata(Path path) {
-        try {
-            PosixFileAttributes attrs = Files.readAttributes(path, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            return new PosixMetadata(
-                    PosixFilePermissions.toString(attrs.permissions()),
-                    attrs.owner().getName(),
-                    attrs.group().getName()
-            );
-        } catch (UnsupportedOperationException | IOException ignored) {
-            return new PosixMetadata("", readOwner(path), "");
+        Set<String> needed = new HashSet<>();
+        for (RawEntry entry : raw.values()) {
+            if (!entry.attrs().isDirectory()) {
+                Path parent = Path.of(entry.relative()).getParent();
+                while (parent != null) { needed.add(parent.toString().replace('\\', '/')); parent = parent.getParent(); }
+            }
         }
+        Map<Object, BackupEntry> byIdentity = new HashMap<>();
+        List<BackupEntry> result = new ArrayList<>();
+        for (RawEntry rawEntry : raw.values()) {
+            BasicFileAttributes attrs = rawEntry.attrs();
+            if (attrs.isDirectory() && !filter.isUnrestricted() && !needed.contains(rawEntry.relative())) continue;
+            EntryType type = attrs.isDirectory() ? EntryType.DIRECTORY : attrs.isSymbolicLink() ? EntryType.SYMBOLIC_LINK : EntryType.FILE;
+            String target = "", hash = "";
+            if (type == EntryType.SYMBOLIC_LINK) target = Files.readSymbolicLink(rawEntry.path()).toString();
+            if (type == EntryType.FILE) {
+                BackupEntry first = attrs.fileKey() == null ? null : byIdentity.get(attrs.fileKey());
+                if (first != null) { type = EntryType.HARD_LINK; target = first.relativePath(); hash = first.sha256(); }
+                else {
+                    hash = HashUtils.sha256(rawEntry.path());
+                    if (attrs.fileKey() == null) warnings.accept("Hardlink identity unavailable; stored as ordinary file: " + rawEntry.relative());
+                }
+            }
+            BackupEntry entry = new BackupEntry(rawEntry.relative(), attrs.isDirectory(), attrs.isDirectory() ? 0 : attrs.size(),
+                    attrs.lastModifiedTime().toMillis(), hash, rawEntry.permissions(), rawEntry.owner(), rawEntry.group(),
+                    type, target, attrs.lastAccessTime().toMillis(), attrs.creationTime().toMillis());
+            if (type == EntryType.FILE && attrs.fileKey() != null) byIdentity.put(attrs.fileKey(), entry);
+            result.add(entry);
+        }
+        return result;
     }
 
-    private String readOwner(Path path) {
+    private static String relative(Path root, Path path) { return root.relativize(path).toString().replace('\\', '/'); }
+
+    private RawEntry capture(Path path, String relative, BasicFileAttributes attrs) throws IOException {
+        String permissions = "", owner = "", group = "";
         try {
+            PosixFileAttributes posix = Files.readAttributes(path, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            permissions = PosixFilePermissions.toString(posix.permissions()); owner = posix.owner().getName(); group = posix.group().getName();
+        } catch (UnsupportedOperationException ignored) {
             FileOwnerAttributeView view = Files.getFileAttributeView(path, FileOwnerAttributeView.class, LinkOption.NOFOLLOW_LINKS);
-            return view == null || view.getOwner() == null ? "" : view.getOwner().getName();
-        } catch (IOException | UnsupportedOperationException ignored) {
-            return "";
+            if (view != null) owner = view.getOwner().getName();
         }
+        return new RawEntry(path, relative, attrs, permissions, owner, group);
     }
-
-    private record PosixMetadata(String permissions, String owner, String group) {
-    }
+    private record RawEntry(Path path, String relative, BasicFileAttributes attrs, String permissions, String owner, String group) {}
 }

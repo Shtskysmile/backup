@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
 
 public final class BackupManifest {
     public static final String ARCHIVE_ENTRY_NAME = "BACKPACK-MANIFEST.properties";
-    private static final String VERSION = "1";
+    private static final String VERSION = "2";
 
     private final String sourceRoot;
     private final Instant createdAt;
@@ -27,6 +27,7 @@ public final class BackupManifest {
     private final boolean incremental;
     private final boolean encrypted;
     private final List<BackupEntry> entries;
+    private BackupCatalog.Snapshot snapshot;
 
     public BackupManifest(
             String sourceRoot,
@@ -43,6 +44,13 @@ public final class BackupManifest {
         this.encrypted = encrypted;
         this.entries = List.copyOf(entries);
     }
+
+    public BackupManifest withSnapshot(BackupCatalog.Snapshot value) {
+        this.snapshot = value;
+        return this;
+    }
+
+    public BackupCatalog.Snapshot snapshot() { return snapshot; }
 
     public String sourceRoot() {
         return sourceRoot;
@@ -85,10 +93,16 @@ public final class BackupManifest {
     }
 
     public void store(Path manifestPath) throws IOException {
-        Files.createDirectories(manifestPath.getParent());
-        try (Writer writer = Files.newBufferedWriter(manifestPath, StandardCharsets.UTF_8)) {
-            toProperties().store(writer, "Backup manifest");
-        }
+        Path target = manifestPath.toAbsolutePath().normalize();
+        Files.createDirectories(target.getParent());
+        Path temporary = Files.createTempFile(target.getParent(), ".manifest-", ".tmp");
+        try {
+            try (Writer writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
+                toProperties().store(writer, "Backup manifest");
+            }
+            Files.move(temporary, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } finally { Files.deleteIfExists(temporary); }
     }
 
     private Properties toProperties() {
@@ -100,6 +114,14 @@ public final class BackupManifest {
         properties.setProperty("incremental", Boolean.toString(incremental));
         properties.setProperty("encrypted", Boolean.toString(encrypted));
         properties.setProperty("entry.count", Integer.toString(entries.size()));
+        if (snapshot != null) {
+            properties.setProperty("taskId", snapshot.taskId());
+            properties.setProperty("snapshotId", snapshot.snapshotId());
+            properties.setProperty("groupId", snapshot.groupId());
+            properties.setProperty("parentId", snapshot.parentId());
+            properties.setProperty("sequence", Integer.toString(snapshot.sequence()));
+            properties.setProperty("archiveName", snapshot.archiveName());
+        }
         for (int i = 0; i < entries.size(); i++) {
             BackupEntry entry = entries.get(i);
             String prefix = "entry." + i + ".";
@@ -111,28 +133,35 @@ public final class BackupManifest {
             properties.setProperty(prefix + "permissions", entry.permissions());
             properties.setProperty(prefix + "owner", entry.owner());
             properties.setProperty(prefix + "group", entry.group());
+            properties.setProperty(prefix + "type", entry.type().name());
+            properties.setProperty(prefix + "linkTarget", entry.linkTarget());
+            if (entry.lastAccessMillis() != null) properties.setProperty(prefix + "lastAccessMillis", entry.lastAccessMillis().toString());
+            if (entry.creationMillis() != null) properties.setProperty(prefix + "creationMillis", entry.creationMillis().toString());
         }
         return properties;
     }
 
     public static BackupManifest load(Path manifestPath) throws IOException {
         try (Reader reader = Files.newBufferedReader(manifestPath, StandardCharsets.UTF_8)) {
-            return load(reader);
+            try { return load(reader); }
+            catch (IllegalArgumentException | NullPointerException e) { throw new IOException("Invalid backup manifest", e); }
         }
     }
 
     public static BackupManifest fromString(String content) throws IOException {
-        return load(new StringReader(content));
+        try { return load(new StringReader(content)); }
+        catch (IllegalArgumentException | NullPointerException e) { throw new IOException("Invalid backup manifest", e); }
     }
 
     private static BackupManifest load(Reader reader) throws IOException {
         Properties properties = new Properties();
         properties.load(reader);
         String version = properties.getProperty("version");
-        if (!VERSION.equals(version)) {
+        if (!VERSION.equals(version) && !"1".equals(version)) {
             throw new IOException("Unsupported manifest version: " + version);
         }
         int count = Integer.parseInt(properties.getProperty("entry.count", "0"));
+        if (count < 0 || count > 1_000_000) throw new IOException("Invalid manifest entry count");
         List<BackupEntry> entries = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
             String prefix = "entry." + i + ".";
@@ -144,10 +173,15 @@ public final class BackupManifest {
                     properties.getProperty(prefix + "sha256", ""),
                     properties.getProperty(prefix + "permissions", ""),
                     properties.getProperty(prefix + "owner", ""),
-                    properties.getProperty(prefix + "group", "")
+                    properties.getProperty(prefix + "group", ""),
+                    EntryType.valueOf(properties.getProperty(prefix + "type",
+                            Boolean.parseBoolean(properties.getProperty(prefix + "directory")) ? "DIRECTORY" : "FILE")),
+                    properties.getProperty(prefix + "linkTarget", ""),
+                    nullableLong(properties, prefix + "lastAccessMillis"),
+                    nullableLong(properties, prefix + "creationMillis")
             ));
         }
-        return new BackupManifest(
+        BackupManifest manifest = new BackupManifest(
                 properties.getProperty("sourceRoot", ""),
                 Instant.parse(properties.getProperty("createdAt", Instant.EPOCH.toString())),
                 CompressionType.valueOf(properties.getProperty("compressionType", CompressionType.ZIP.name())),
@@ -155,5 +189,17 @@ public final class BackupManifest {
                 Boolean.parseBoolean(properties.getProperty("encrypted", "false")),
                 entries
         );
+        if (properties.containsKey("snapshotId")) {
+            manifest.withSnapshot(new BackupCatalog.Snapshot(properties.getProperty("taskId"),
+                    properties.getProperty("snapshotId"), properties.getProperty("groupId"),
+                    properties.getProperty("parentId", ""), Integer.parseInt(properties.getProperty("sequence")),
+                    properties.getProperty("archiveName"), manifest.createdAt()));
+        }
+        return manifest;
+    }
+
+    private static Long nullableLong(Properties properties, String key) {
+        String value = properties.getProperty(key);
+        return value == null ? null : Long.valueOf(value);
     }
 }
