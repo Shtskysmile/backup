@@ -27,26 +27,35 @@ public final class WatchBackupService implements AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
-    private WatchService watchService;
+    private volatile WatchService watchService;
 
-    public void start(Path sourceDirectory, Duration debounce, Runnable backupTask, Consumer<String> statusSink) throws IOException {
+    public synchronized void start(Path sourceDirectory, Duration debounce, Runnable backupTask, Consumer<String> statusSink) throws IOException {
         Objects.requireNonNull(sourceDirectory, "sourceDirectory");
         Objects.requireNonNull(debounce, "debounce");
         Objects.requireNonNull(backupTask, "backupTask");
-        if (!running.compareAndSet(false, true)) {
-            throw new IllegalStateException("Watch backup is already running.");
-        }
-        watchService = sourceDirectory.getFileSystem().newWatchService();
+        if (running.get()) throw new IllegalStateException("Watch backup is already running.");
+        if (executorService.isShutdown()) throw new IllegalStateException("Watch service is closed.");
+        Path root = sourceDirectory.toRealPath();
+        if (!Files.isDirectory(root)) throw new IOException("Watch source is not a directory: " + root);
+        WatchService session = root.getFileSystem().newWatchService();
         Map<WatchKey, Path> watchedDirectories = new HashMap<>();
-        registerTree(sourceDirectory, watchedDirectories);
-        executorService.submit(() -> watchLoop(sourceDirectory, watchedDirectories, debounce, backupTask, statusSink));
+        try {
+            registerTree(root, watchedDirectories, session);
+            watchService = session;
+            running.set(true);
+            executorService.submit(() -> watchLoop(root, watchedDirectories, debounce, backupTask, statusSink, session));
+        } catch (IOException | RuntimeException e) {
+            running.set(false);
+            session.close();
+            throw e;
+        }
     }
 
     public boolean isRunning() {
         return running.get();
     }
 
-    public void stop() {
+    public synchronized void stop() {
         running.set(false);
         if (watchService != null) {
             try {
@@ -62,26 +71,29 @@ public final class WatchBackupService implements AutoCloseable {
             Map<WatchKey, Path> watchedDirectories,
             Duration debounce,
             Runnable backupTask,
-            Consumer<String> statusSink
+            Consumer<String> statusSink,
+            WatchService session
     ) {
         long debounceMillis = Math.max(250, debounce.toMillis());
         long lastChange = 0;
         boolean dirty = false;
         try {
-            while (running.get()) {
-                WatchKey key = watchService.poll(500, TimeUnit.MILLISECONDS);
+            while (running.get() && watchService == session) {
+                WatchKey key = session.poll(500, TimeUnit.MILLISECONDS);
                 if (key != null) {
                     Path directory = watchedDirectories.get(key);
                     if (directory != null) {
                         for (WatchEvent<?> event : key.pollEvents()) {
                             WatchEvent.Kind<?> kind = event.kind();
                             if (kind == StandardWatchEventKinds.OVERFLOW) {
+                                dirty = true;
+                                lastChange = System.currentTimeMillis();
                                 continue;
                             }
                             Path changed = directory.resolve((Path) event.context());
-                            if (kind == StandardWatchEventKinds.ENTRY_CREATE && Files.isDirectory(changed)) {
+                            if (kind == StandardWatchEventKinds.ENTRY_CREATE && Files.isDirectory(changed, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
                                 try {
-                                    registerTree(changed, watchedDirectories);
+                                    registerTree(changed, watchedDirectories, session);
                                 } catch (IOException e) {
                                     emit(statusSink, "Unable to watch new directory: " + e.getMessage());
                                 }
@@ -94,7 +106,7 @@ public final class WatchBackupService implements AutoCloseable {
                         watchedDirectories.remove(key);
                     }
                 }
-                if (dirty && System.currentTimeMillis() - lastChange >= debounceMillis) {
+                if (running.get() && watchService == session && dirty && System.currentTimeMillis() - lastChange >= debounceMillis) {
                     dirty = false;
                     emit(statusSink, "Change detected under " + sourceDirectory + "; running backup.");
                     backupTask.run();
@@ -102,19 +114,24 @@ public final class WatchBackupService implements AutoCloseable {
             }
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
+        } catch (java.nio.file.ClosedWatchServiceException ignored) {
+            // Expected after stop; an old session must never stop a replacement session.
         } catch (RuntimeException e) {
             emit(statusSink, "Watch backup stopped: " + e.getMessage());
         } finally {
-            running.set(false);
+            synchronized (this) {
+                if (watchService == session) running.set(false);
+            }
+            try { session.close(); } catch (IOException ignored) {}
         }
     }
 
-    private void registerTree(Path root, Map<WatchKey, Path> watchedDirectories) throws IOException {
+    private void registerTree(Path root, Map<WatchKey, Path> watchedDirectories, WatchService session) throws IOException {
         Files.walkFileTree(root, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
                 WatchKey key = dir.register(
-                        watchService,
+                        session,
                         StandardWatchEventKinds.ENTRY_CREATE,
                         StandardWatchEventKinds.ENTRY_MODIFY,
                         StandardWatchEventKinds.ENTRY_DELETE
