@@ -8,7 +8,7 @@ import java.nio.file.attribute.*;
 import java.time.Instant;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static com.backup.testing.FileSystemCapabilities.*;
 
 class ArchiveMetadataTest {
     @TempDir Path temp;
@@ -58,9 +58,6 @@ class ArchiveMetadataTest {
     private BasicFileAttributes attrs(Path path) throws Exception {
         return Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
     }
-    private void posix(Path path) {
-        assumeTrue(Files.getFileAttributeView(path, PosixFileAttributeView.class) != null, "POSIX attributes unavailable");
-    }
 
     @Test void scannerRecordsAccessTimeBeforeReadingFileForHash() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
@@ -75,7 +72,7 @@ class ArchiveMetadataTest {
 
     @Test void restorePreservesFileAccessModifiedTimesAndPermissions() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
-        Path file = Files.writeString(source.resolve("file"), "metadata"); posix(file);
+        Path file = Files.writeString(source.resolve("file"), "metadata"); assumePosix(file);
         Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-r-----"));
         times(file, OLD, OLD - 100_000);
         BackupService service = new BackupService();
@@ -92,7 +89,7 @@ class ArchiveMetadataTest {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path parent = Files.createDirectory(source.resolve("parent"));
         Path child = Files.createDirectory(parent.resolve("child"));
-        Files.writeString(child.resolve("file"), "child"); posix(parent);
+        Files.writeString(child.resolve("file"), "child"); assumePosix(parent);
         Files.setPosixFilePermissions(parent, PosixFilePermissions.fromString("rwxr-x---"));
         Files.setPosixFilePermissions(child, PosixFilePermissions.fromString("rwx------"));
         times(child, OLD + 20_000, OLD - 20_000); times(parent, OLD, OLD - 40_000);
@@ -120,7 +117,8 @@ class ArchiveMetadataTest {
     }
 
     @Test void absoluteAndBrokenSymlinksPreserveTargetsWithoutChangingExternalContentOrMetadata() throws Exception {
-        Path outside = Files.writeString(temp.resolve("outside"), "external sentinel"); posix(outside);
+        assumeSymbolicLinks(temp);
+        Path outside = Files.writeString(temp.resolve("outside"), "external sentinel"); assumePosix(outside);
         Files.setPosixFilePermissions(outside, PosixFilePermissions.fromString("rw-r-----"));
         times(outside, OLD, OLD - 100_000);
         BasicFileAttributes before = attrs(outside);
@@ -144,9 +142,11 @@ class ArchiveMetadataTest {
     }
 
     @Test void incrementalRestoreSplitsFormerHardlinksWithoutChangingUnmodifiedSibling() throws Exception {
+        assumeHardLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
         Path first = Files.writeString(source.resolve("a"), "original");
         Files.createLink(source.resolve("b"), first);
+        assumeFileKeys(first);
         BackupService service = new BackupService();
         BackupOptions options = options(source, true);
         BackupResult full = service.backup(options);
@@ -162,6 +162,7 @@ class ArchiveMetadataTest {
     }
 
     @Test void symlinkMetadataOnlyChangeIsIncludedInIncrementAndRestored() throws Exception {
+        assumeSymbolicLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
         Path link = Files.createSymbolicLink(source.resolve("link"), Path.of("missing"));
         times(link, OLD, OLD);
@@ -177,9 +178,11 @@ class ArchiveMetadataTest {
     }
 
     @Test void hardlinkPermissionOnlyChangeIsIncludedInIncrementAndKeepsIdentity() throws Exception {
+        assumeHardLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
-        Path first = Files.writeString(source.resolve("a"), "unchanged data"); posix(first);
+        Path first = Files.writeString(source.resolve("a"), "unchanged data"); assumePosix(first);
         Files.createLink(source.resolve("b"), first);
+        assumeFileKeys(first);
         Files.setPosixFilePermissions(first, PosixFilePermissions.fromString("rw-------"));
         BackupService service = new BackupService(); BackupOptions options = options(source, true);
         BackupResult full = service.backup(options);

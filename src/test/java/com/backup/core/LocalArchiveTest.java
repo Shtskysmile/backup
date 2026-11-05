@@ -7,14 +7,17 @@ import java.nio.file.attribute.*;
 import java.io.IOException;
 import java.util.zip.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static com.backup.testing.FileSystemCapabilities.*;
 
 class LocalArchiveTest {
     @TempDir Path temp;
 
     @Test void missingHardlinkBaseDoesNotDeleteExistingTargetFile() throws Exception {
+        assumeHardLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
         Files.writeString(source.resolve("a"), "data");
         Files.createLink(source.resolve("b"), source.resolve("a"));
+        assumeFileKeys(source.resolve("a"));
         java.util.List<BackupEntry> entries = new FileScanner().scan(source);
         BackupManifest manifest = new BackupManifest(source.toString(), java.time.Instant.now(), CompressionType.ZIP, true, false, entries);
         Path archive = temp.resolve("increment.zip");
@@ -49,6 +52,7 @@ class LocalArchiveTest {
     }
 
     @Test void zipPreservesRelativeAndBrokenSymlinks() throws Exception {
+        assumeSymbolicLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
         Files.writeString(source.resolve("file"), "content");
         Files.createSymbolicLink(source.resolve("link"), Path.of("file"));
@@ -61,15 +65,18 @@ class LocalArchiveTest {
     }
 
     @Test void gzipPreservesHardlinkIdentity() throws Exception {
+        assumeHardLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
         Files.writeString(source.resolve("first"), "shared");
         Files.createLink(source.resolve("second"), source.resolve("first"));
+        assumeFileKeys(source.resolve("first"));
         Path out = temp.resolve("out");
         new BackupService().restore(backup(source, CompressionType.GZIP).archivePath(), out, null);
         assertTrue(Files.isSameFile(out.resolve("first"), out.resolve("second")));
     }
 
     @Test void restoreRefusesExistingSymlinkFileWithoutWritingOutside() throws Exception {
+        assumeSymbolicLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
         Files.writeString(source.resolve("file"), "new");
         Path archive = backup(source, CompressionType.ZIP).archivePath();
@@ -81,6 +88,7 @@ class LocalArchiveTest {
     }
 
     @Test void restoreRefusesSymlinkParentWithoutWritingOutside() throws Exception {
+        assumeDirectorySymbolicLinks(temp);
         Path source = Files.createDirectories(temp.resolve("source/docs"));
         Files.writeString(source.resolve("file"), "new");
         Path archive = backup(source.getParent(), CompressionType.GZIP).archivePath();
@@ -92,6 +100,7 @@ class LocalArchiveTest {
     }
 
     @Test void replacingExistingHardlinkDoesNotChangeOtherPath() throws Exception {
+        assumeHardLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
         Files.writeString(source.resolve("file"), "new");
         Path archive = backup(source, CompressionType.ZIP).archivePath();

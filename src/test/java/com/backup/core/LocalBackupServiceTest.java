@@ -7,6 +7,7 @@ import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static com.backup.testing.FileSystemCapabilities.*;
 
 class LocalBackupServiceTest {
     @TempDir Path temp;
@@ -15,6 +16,7 @@ class LocalBackupServiceTest {
     }
 
     @Test void filtersBeforeChoosingHardlinkPayloadAndKeepsAncestors() throws Exception {
+        assumeHardLinks(temp);
         Path source = Files.createDirectories(temp.resolve("source/docs"));
         Files.writeString(source.resolve("a.txt"), "shared");
         Files.createLink(source.resolve("b.txt"), source.resolve("a.txt"));
@@ -72,6 +74,7 @@ class LocalBackupServiceTest {
 
     @Test void metadataOnlyChangesAreIncludedInIncremental() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source")); Path file = Files.writeString(source.resolve("file"), "same");
+        assumePosix(file);
         BackupService service = new BackupService(); BackupOptions options = options(source, "chain", true, 0, BackupFilter.all());
         service.backup(options);
         Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"));
@@ -84,6 +87,7 @@ class LocalBackupServiceTest {
     }
 
     @Test void sourceAliasCannotPlaceDestinationInsideSource() throws Exception {
+        assumeDirectorySymbolicLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
         Path alias = Files.createSymbolicLink(temp.resolve("alias"), source);
         assertThrows(IOException.class, () -> new BackupService().backup(new BackupOptions(alias, source.resolve("nested"), "bad", CompressionType.ZIP, false, false, null)));
