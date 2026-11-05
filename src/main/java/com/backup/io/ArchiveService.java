@@ -14,6 +14,7 @@ public final class ArchiveService {
     private static final String ZIP_DATA_PREFIX = "data/";
     private static final String GZIP_MAGIC = "BACKPACK-GZIP-2";
     private final FifoSupport fifoSupport;
+    private final SymbolicLinkPermissions symbolicLinkPermissions = new SymbolicLinkPermissions();
     public ArchiveService() { this(new FifoSupport()); }
     ArchiveService(FifoSupport fifoSupport) { this.fifoSupport = Objects.requireNonNull(fifoSupport); }
 
@@ -260,12 +261,15 @@ public final class ArchiveService {
         if (!symlink && Files.isSymbolicLink(out)) throw new IOException("Unexpected symbolic link during metadata restore: " + out);
         UserPrincipalLookupService lookup = out.getFileSystem().getUserPrincipalLookupService();
         PosixFileAttributeView posix = Files.getFileAttributeView(out, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
-        if (!symlink && !entry.owner().isBlank()) attempt(entry, "owner", warnings, () -> {
+        if (!entry.owner().isBlank()) attempt(entry, "owner", warnings, () -> {
             FileOwnerAttributeView view = Files.getFileAttributeView(out, FileOwnerAttributeView.class, LinkOption.NOFOLLOW_LINKS);
             if (view == null) throw new UnsupportedOperationException("owner view unavailable");
-            if (!view.getOwner().getName().equals(entry.owner())) view.setOwner(lookup.lookupPrincipalByName(entry.owner()));
+            if (!view.getOwner().getName().equals(entry.owner())) {
+                if (symlink && posix == null) throw new UnsupportedOperationException("No safe symbolic-link owner setter on this platform");
+                view.setOwner(lookup.lookupPrincipalByName(entry.owner()));
+            }
         });
-        if (!symlink && !entry.group().isBlank()) attempt(entry, "group", warnings, () -> {
+        if (!entry.group().isBlank()) attempt(entry, "group", warnings, () -> {
             if (posix == null) throw new UnsupportedOperationException("POSIX view unavailable");
             if (!posix.readAttributes().group().getName().equals(entry.group())) posix.setGroup(lookup.lookupPrincipalByGroupName(entry.group()));
         });
@@ -273,9 +277,8 @@ public final class ArchiveService {
             if (posix == null) throw new UnsupportedOperationException("POSIX view unavailable");
             posix.setPermissions(PosixFilePermissions.fromString(entry.permissions()));
         });
-        if (symlink && (!entry.permissions().isBlank() || !entry.owner().isBlank() || !entry.group().isBlank())) {
-            warnings.accept(entry.relativePath() + ": symbolic-link owner/group/permissions skipped to protect its target");
-        }
+        if (symlink && !entry.permissions().isBlank()) attempt(entry, "symbolic-link permissions", warnings,
+                () -> symbolicLinkPermissions.restore(out, PosixFilePermissions.fromString(entry.permissions())));
         if (fifo) {
             // JDK POSIX permission and basic time setters may open a FIFO and block.
             // Permissions were supplied to mkfifo before publishing this entry.
