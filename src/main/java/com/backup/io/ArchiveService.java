@@ -13,6 +13,10 @@ import java.util.zip.*;
 public final class ArchiveService {
     private static final String ZIP_DATA_PREFIX = "data/";
     private static final String GZIP_MAGIC = "BACKPACK-GZIP-2";
+    private final FifoSupport fifoSupport;
+    public ArchiveService() { this(new FifoSupport()); }
+    ArchiveService(FifoSupport fifoSupport) { this.fifoSupport = Objects.requireNonNull(fifoSupport); }
+
     private static final int MAX_MANIFEST = 64 * 1024 * 1024;
 
     public void writeZipArchive(Path sourceRoot, Path output, BackupManifest manifest, Iterable<BackupEntry> archivedEntries) throws IOException {
@@ -73,6 +77,7 @@ public final class ArchiveService {
     private RestoreResult restoreZip(Path archive, Path root) throws IOException {
         BackupManifest manifest;
         List<BackupEntry> restored = new ArrayList<>(); Set<String> seen = new HashSet<>();
+        List<String> warnings = new ArrayList<>(); Set<String> skipped = new HashSet<>();
         try (ZipInputStream in = new ZipInputStream(new BufferedInputStream(Files.newInputStream(archive)))) {
             ZipEntry first = in.getNextEntry();
             if (first == null || !BackupManifest.ARCHIVE_ENTRY_NAME.equals(first.getName())) throw new IOException("Archive must start with a Backup manifest");
@@ -85,16 +90,17 @@ public final class ArchiveService {
                 if (path.endsWith("/")) path = path.substring(0, path.length() - 1);
                 BackupEntry entry = requireEntry(byPath, seen, path);
                 if (zip.isDirectory() != entry.directory()) throw new IOException("Entry type mismatch: " + path);
-                restorePayload(root, entry, in, entry.type() == EntryType.FILE ? entry.size() : 0);
+                restorePayload(root, entry, in, entry.type() == EntryType.FILE ? entry.size() : 0, warnings, skipped);
                 if (in.read() != -1) throw new IOException("Unexpected extra entry data: " + path);
                 restored.add(entry); in.closeEntry();
             }
         }
-        return finish(root, manifest, restored);
+        return finish(root, manifest, restored, warnings, skipped);
     }
 
     private RestoreResult restoreGzip(Path archive, Path root) throws IOException {
         BackupManifest manifest; List<BackupEntry> restored = new ArrayList<>(); Set<String> seen = new HashSet<>();
+        List<String> warnings = new ArrayList<>(); Set<String> skipped = new HashSet<>();
         try (DataInputStream in = new DataInputStream(new BufferedInputStream(new GZIPInputStream(Files.newInputStream(archive))))) {
             String magic = readString(in);
             if (!GZIP_MAGIC.equals(magic) && !"BACKPACK-GZIP-1".equals(magic)) throw new IOException("Unsupported Backup GZIP archive");
@@ -108,17 +114,18 @@ public final class ArchiveService {
                 boolean directory = in.readBoolean(); long size = in.readLong(); in.readLong();
                 long expected = entry.type() == EntryType.FILE ? entry.size() : 0;
                 if (directory != entry.directory() || size != expected) throw new IOException("Entry metadata mismatch: " + entry.relativePath());
-                restorePayload(root, entry, in, size); restored.add(entry);
+                restorePayload(root, entry, in, size, warnings, skipped); restored.add(entry);
             }
             if (in.read() != -1) throw new IOException("Unexpected trailing archive data");
         }
-        return finish(root, manifest, restored);
+        return finish(root, manifest, restored, warnings, skipped);
     }
 
     private Map<String, BackupEntry> validateManifest(Path root, BackupManifest manifest) throws IOException {
         Map<String, BackupEntry> result = new LinkedHashMap<>();
         for (BackupEntry entry : manifest.entries()) {
             safeResolve(root, entry.relativePath());
+            if (entry.type() == EntryType.FIFO && (entry.size() != 0 || !entry.linkTarget().isEmpty())) throw new IOException("FIFO entries must have zero payload and no target");
             if (result.put(entry.relativePath(), entry) != null) throw new IOException("Duplicate manifest path: " + entry.relativePath());
             if ((entry.type() == EntryType.HARD_LINK || entry.type() == EntryType.SYMBOLIC_LINK) && entry.linkTarget().isEmpty()) throw new IOException("Missing link target");
         }
@@ -143,7 +150,7 @@ public final class ArchiveService {
         return entry;
     }
 
-    private void restorePayload(Path root, BackupEntry entry, InputStream in, long size) throws IOException {
+    private void restorePayload(Path root, BackupEntry entry, InputStream in, long size, List<String> warnings, Set<String> skipped) throws IOException {
         Path out = safeResolve(root, entry.relativePath()); checkParents(root, out);
         if (entry.directory()) {
             if (Files.isSymbolicLink(out)) throw new IOException("Symbolic link in restore path: " + out);
@@ -158,10 +165,28 @@ public final class ArchiveService {
                 if (!entry.sha256().isEmpty() && !HashUtils.sha256(staged).equals(entry.sha256())) throw new IOException("Content checksum mismatch: " + entry.relativePath());
                 moveReplacing(staged, out);
             } finally { Files.deleteIfExists(staged); }
+        } else if (entry.type() == EntryType.FIFO && !restoreFifo(root, entry, warnings::add)) {
+            skipped.add(entry.relativePath());
         }
     }
 
-    private RestoreResult finish(Path root, BackupManifest manifest, List<BackupEntry> entries) throws IOException {
+    private boolean restoreFifo(Path root, BackupEntry entry, Consumer<String> warnings) throws IOException {
+        Path out = safeResolve(root, entry.relativePath()); checkParents(root, out);
+        if (Files.isSymbolicLink(out)) throw new IOException("Refusing to overwrite symbolic link: " + out);
+        Files.createDirectories(out.getParent());
+        Path staged = Files.createTempFile(out.getParent(), ".backup-fifo-", ".tmp");
+        Files.delete(staged);
+        try {
+            fifoSupport.create(entry, staged);
+            moveReplacing(staged, out);
+            return true;
+        } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
+            warnings.accept(entry.relativePath() + ": FIFO not recreated (" + e.getMessage() + ")");
+            return false;
+        } finally { Files.deleteIfExists(staged); }
+    }
+
+    private RestoreResult finish(Path root, BackupManifest manifest, List<BackupEntry> entries, List<String> warnings, Set<String> skipped) throws IOException {
         if (!manifest.incremental() && entries.size() != manifest.entries().size()) {
             throw new IOException("Full archive is missing file or directory payload entries");
         }
@@ -184,8 +209,7 @@ public final class ArchiveService {
                 } finally { Files.deleteIfExists(staged); }
             }
         }
-        List<String> warnings = new ArrayList<>();
-        List<BackupEntry> metadata = new ArrayList<>(entries);
+        List<BackupEntry> metadata = new ArrayList<>(entries.stream().filter(entry -> !skipped.contains(entry.relativePath())).toList());
         if (manifest.incremental()) {
             Set<String> restoredPaths = new HashSet<>();
             entries.forEach(entry -> restoredPaths.add(entry.relativePath()));
@@ -206,6 +230,7 @@ public final class ArchiveService {
             case DIRECTORY -> Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS);
             case SYMBOLIC_LINK -> Files.isSymbolicLink(path) && Files.readSymbolicLink(path).toString().equals(entry.linkTarget());
             case FILE -> matchesFile(path, entry);
+            case FIFO -> FifoSupport.isFifo(path);
             case HARD_LINK -> {
                 Path target = safeResolve(root, entry.linkTarget()); checkParents(root, target);
                 yield matchesFile(path, entry) && Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) && Files.isSameFile(path, target);
@@ -221,6 +246,17 @@ public final class ArchiveService {
     private void applyMetadata(Path root, BackupEntry entry, Consumer<String> warnings) throws IOException {
         Path out = safeResolve(root, entry.relativePath()); checkParents(root, out);
         boolean symlink = entry.type() == EntryType.SYMBOLIC_LINK;
+        boolean fifo = entry.type() == EntryType.FIFO;
+        if (fifo && !FifoSupport.isFifo(out)) { warnings.accept(entry.relativePath() + ": FIFO metadata skipped because target has a different type"); return; }
+        if (fifo && !entry.permissions().isBlank()) {
+            try {
+                if (!Files.getPosixFilePermissions(out, LinkOption.NOFOLLOW_LINKS).equals(PosixFilePermissions.fromString(entry.permissions()))
+                        && !restoreFifo(root, entry, warnings)) return;
+            } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
+                warnings.accept(entry.relativePath() + ": could not restore FIFO permissions (" + e.getMessage() + ")");
+                return;
+            }
+        }
         if (!symlink && Files.isSymbolicLink(out)) throw new IOException("Unexpected symbolic link during metadata restore: " + out);
         UserPrincipalLookupService lookup = out.getFileSystem().getUserPrincipalLookupService();
         PosixFileAttributeView posix = Files.getFileAttributeView(out, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
@@ -233,12 +269,18 @@ public final class ArchiveService {
             if (posix == null) throw new UnsupportedOperationException("POSIX view unavailable");
             if (!posix.readAttributes().group().getName().equals(entry.group())) posix.setGroup(lookup.lookupPrincipalByGroupName(entry.group()));
         });
-        if (!symlink && !entry.permissions().isBlank()) attempt(entry, "permissions", warnings, () -> {
+        if (!symlink && !fifo && !entry.permissions().isBlank()) attempt(entry, "permissions", warnings, () -> {
             if (posix == null) throw new UnsupportedOperationException("POSIX view unavailable");
             posix.setPermissions(PosixFilePermissions.fromString(entry.permissions()));
         });
         if (symlink && (!entry.permissions().isBlank() || !entry.owner().isBlank() || !entry.group().isBlank())) {
             warnings.accept(entry.relativePath() + ": symbolic-link owner/group/permissions skipped to protect its target");
+        }
+        if (fifo) {
+            // JDK POSIX permission and basic time setters may open a FIFO and block.
+            // Permissions were supplied to mkfifo before publishing this entry.
+            fifoSupport.restoreTimes(entry, out, warnings);
+            return;
         }
         BasicFileAttributeView basic = Files.getFileAttributeView(out, BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
         attempt(entry, "modified/access time", warnings, () -> basic.setTimes(FileTime.fromMillis(entry.lastModifiedMillis()),
