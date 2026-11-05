@@ -18,10 +18,12 @@ import java.util.stream.Collectors;
  * also matches zero directories. Extension comparisons ignore case and an optional leading dot.
  * Dotfiles and names ending in a dot count as extensionless. With no extensions specified,
  * includeExtensionless=false means no type restriction; true selects only extensionless names.
- * Time and byte bounds include both endpoints. Directory pruning uses only explicit exclusions.
+ * Time and byte bounds include both endpoints. Owner names are compared exactly but without
+ * case sensitivity; a blank recorded owner never matches a nonempty owner criterion.
+ * Directory pruning uses only explicit exclusions.
  */
 public record BackupFilter(String includePaths, String excludePaths, String extensions,
-                           boolean includeExtensionless, String names, Long modifiedAfterMillis,
+                           boolean includeExtensionless, String names, String owners, Long modifiedAfterMillis,
                            Long modifiedBeforeMillis, Long minBytes, Long maxBytes) {
     // Records cannot hold additional instance state. A bounded cache avoids compiling globs per file.
     private static final Map<String, List<Pattern>> GLOBS = Collections.synchronizedMap(
@@ -36,6 +38,7 @@ public record BackupFilter(String includePaths, String excludePaths, String exte
         excludePaths = normalize(excludePaths, false);
         extensions = normalize(extensions, true);
         names = normalize(names, false);
+        owners = normalizeOwner(owners);
         if ((minBytes != null && minBytes < 0) || (maxBytes != null && maxBytes < 0))
             throw new IllegalArgumentException("Byte limits must be nonnegative");
         if (minBytes != null && maxBytes != null && minBytes > maxBytes)
@@ -47,16 +50,28 @@ public record BackupFilter(String includePaths, String excludePaths, String exte
         patterns(names);
     }
 
+    /** Convenience constructor for criteria without an owner condition. */
+    public BackupFilter(String includePaths, String excludePaths, String extensions, boolean includeExtensionless,
+                        String names, Long modifiedAfterMillis, Long modifiedBeforeMillis, Long minBytes, Long maxBytes) {
+        this(includePaths, excludePaths, extensions, includeExtensionless, names, "",
+                modifiedAfterMillis, modifiedBeforeMillis, minBytes, maxBytes);
+    }
+
     public static BackupFilter all() {
-        return new BackupFilter("", "", "", false, "", null, null, null, null);
+        return new BackupFilter("", "", "", false, "", "", null, null, null, null);
     }
 
     public boolean matches(String relativePath, long size, long modified) {
+        return matches(relativePath, size, modified, "");
+    }
+
+    public boolean matches(String relativePath, long size, long modified, String owner) {
         Objects.requireNonNull(relativePath, "relativePath");
         if (size < 0 || any(excludePaths, relativePath)) return false;
         if (!includePaths.isEmpty() && !any(includePaths, relativePath)) return false;
         String basename = relativePath.substring(relativePath.lastIndexOf('/') + 1);
         if (!names.isEmpty() && !any(names, basename)) return false;
+        if (!owners.isEmpty() && !matchesOwner(owner)) return false;
         if (!extensions.isEmpty() || includeExtensionless) {
             int dot = basename.lastIndexOf('.');
             String extension = dot <= 0 || dot == basename.length() - 1 ? ""
@@ -71,6 +86,12 @@ public record BackupFilter(String includePaths, String excludePaths, String exte
                 && (maxBytes == null || size <= maxBytes);
     }
 
+    private boolean matchesOwner(String owner) {
+        if (owner == null || owner.isBlank()) return false;
+        String normalized = owner.strip().toLowerCase(Locale.ROOT);
+        return Arrays.asList(owners.split(";")).contains(normalized);
+    }
+
     public boolean excludesDirectory(String relativePath) {
         Objects.requireNonNull(relativePath, "relativePath");
         String path = relativePath.endsWith("/") ? relativePath.substring(0, relativePath.length() - 1) : relativePath;
@@ -79,15 +100,16 @@ public record BackupFilter(String includePaths, String excludePaths, String exte
 
     public boolean isUnrestricted() {
         return includePaths.isEmpty() && excludePaths.isEmpty() && extensions.isEmpty()
-                && !includeExtensionless && names.isEmpty() && modifiedAfterMillis == null
-                && modifiedBeforeMillis == null && minBytes == null && maxBytes == null;
+                && !includeExtensionless && names.isEmpty() && owners.isEmpty()
+                && modifiedAfterMillis == null && modifiedBeforeMillis == null
+                && minBytes == null && maxBytes == null;
     }
 
     /** Deterministic, unambiguous representation suitable for deriving a task identity. */
     public String identity() {
-        StringBuilder result = new StringBuilder("filter-v1:");
+        StringBuilder result = new StringBuilder("filter-v2:");
         for (String value : List.of(includePaths, excludePaths, extensions, Boolean.toString(includeExtensionless),
-                names, String.valueOf(modifiedAfterMillis), String.valueOf(modifiedBeforeMillis),
+                names, owners, String.valueOf(modifiedAfterMillis), String.valueOf(modifiedBeforeMillis),
                 String.valueOf(minBytes), String.valueOf(maxBytes))) {
             result.append(value.length()).append(':').append(value);
         }
@@ -99,6 +121,14 @@ public record BackupFilter(String includePaths, String excludePaths, String exte
         return Arrays.stream(value.split(";"))
                 .map(String::strip)
                 .map(s -> extension ? (s.startsWith(".") ? s.substring(1) : s).toLowerCase(Locale.ROOT) : s)
+                .filter(s -> !s.isEmpty()).distinct().sorted().collect(Collectors.joining(";"));
+    }
+
+    private static String normalizeOwner(String value) {
+        if (value == null) return "";
+        return Arrays.stream(value.split(";"))
+                .map(String::strip)
+                .map(s -> s.toLowerCase(Locale.ROOT))
                 .filter(s -> !s.isEmpty()).distinct().sorted().collect(Collectors.joining(";"));
     }
 

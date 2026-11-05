@@ -89,6 +89,7 @@ public final class BackupFrame extends JFrame {
     private final JTextField extensionsField = new JTextField(34);
     private final JCheckBox extensionlessCheckBox = new JCheckBox("Include extensionless files (alone selects only extensionless)");
     private final JTextField namesField = new JTextField(34);
+    private final JTextField ownersField = new JTextField(34);
     private final JTextField modifiedAfterField = new JTextField(20);
     private final JTextField modifiedBeforeField = new JTextField(20);
     private final JTextField minBytesField = new JTextField(20);
@@ -229,11 +230,12 @@ public final class BackupFrame extends JFrame {
         addRow(filters, row++, "Extensions", extensionsField);
         addRow(filters, row++, "", extensionlessCheckBox);
         addRow(filters, row++, "Names", namesField);
+        addRow(filters, row++, "Owners", ownersField);
         addRow(filters, row++, "Modified at or after", modifiedAfterField);
         addRow(filters, row++, "Modified at or before", modifiedBeforeField);
         addRow(filters, row++, "Minimum bytes", minBytesField);
         addRow(filters, row++, "Maximum bytes", maxBytesField);
-        addRow(filters, row, "Filter rules", new JLabel("<html>Leave blank for all files. Separate alternatives with ; — conditions intersect.<br>Paths use / and glob patterns, e.g. docs/**; names match the basename.<br>Extensions ignore case, e.g. txt;pdf. Excluded directories are not scanned.<br>Dates: yyyy-MM-dd HH:mm:ss, local time; dates and sizes include both boundaries.<br>Links are filtered by their own path, name, modification time and recorded size; targets are not read.</html>"));
+        addRow(filters, row, "Filter rules", new JLabel("<html>Leave blank for all files. Separate alternatives with ; — conditions intersect.<br>Paths use / and glob patterns, e.g. docs/**; names match the basename.<br>Extensions ignore case, e.g. txt;pdf. Excluded directories are not scanned.<br>Owners match exact names without case sensitivity, e.g. alice;root; unknown owners do not match.<br>Dates: yyyy-MM-dd HH:mm:ss, local time; dates and sizes include both boundaries.<br>Links are filtered by their own path, name, owner, modification time and recorded size; targets are not read.</html>"));
         filters.setVisible(false);
         toggle.addActionListener(event -> {
             filters.setVisible(!filters.isVisible());
@@ -463,7 +465,7 @@ public final class BackupFrame extends JFrame {
                 encryptedCheckBox.isSelected(),
                 passphraseField.getPassword(),
                 new BackupFilter(includePathsField.getText(), excludePathsField.getText(),
-                        extensionsField.getText(), extensionlessCheckBox.isSelected(), namesField.getText(),
+                        extensionsField.getText(), extensionlessCheckBox.isSelected(), namesField.getText(), ownersField.getText(),
                         parseFilterTime(modifiedAfterField, "Earliest modified time"),
                         parseFilterTime(modifiedBeforeField, "Latest modified time"),
                         parseBytes(minBytesField, "Minimum size"), parseBytes(maxBytesField, "Maximum size")),

@@ -28,8 +28,11 @@ public final class FileScanner {
                 String relative = relative(normalizedRoot, file);
                 if (!attrs.isRegularFile() && !attrs.isSymbolicLink()) {
                     warnings.accept("Skipped unsupported special file: " + relative);
-                } else if (filter.matches(relative, attrs.size(), attrs.lastModifiedTime().toMillis())) {
-                    raw.put(relative, capture(file, relative, attrs));
+                } else {
+                    RawEntry entry = capture(file, relative, attrs);
+                    if (filter.matches(relative, attrs.size(), attrs.lastModifiedTime().toMillis(), entry.owner())) {
+                        raw.put(relative, entry);
+                    }
                 }
                 return FileVisitResult.CONTINUE;
             }
