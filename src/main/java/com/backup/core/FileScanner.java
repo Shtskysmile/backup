@@ -26,10 +26,14 @@ public final class FileScanner {
             }
             @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                 String relative = relative(normalizedRoot, file);
-                if (!attrs.isRegularFile() && !attrs.isSymbolicLink()) {
+                boolean fifo = !attrs.isRegularFile() && !attrs.isSymbolicLink() && isFifo(file);
+                if (!attrs.isRegularFile() && !attrs.isSymbolicLink() && !fifo) {
                     warnings.accept("Skipped unsupported special file: " + relative);
-                } else if (filter.matches(relative, attrs.size(), attrs.lastModifiedTime().toMillis())) {
-                    raw.put(relative, capture(file, relative, attrs));
+                } else {
+                    RawEntry entry = capture(file, relative, attrs);
+                    if (filter.matches(relative, fifo ? 0 : attrs.size(), attrs.lastModifiedTime().toMillis(), entry.owner())) {
+                        raw.put(relative, entry);
+                    }
                 }
                 return FileVisitResult.CONTINUE;
             }
@@ -46,7 +50,7 @@ public final class FileScanner {
         for (RawEntry rawEntry : raw.values()) {
             BasicFileAttributes attrs = rawEntry.attrs();
             if (attrs.isDirectory() && !filter.isUnrestricted() && !needed.contains(rawEntry.relative())) continue;
-            EntryType type = attrs.isDirectory() ? EntryType.DIRECTORY : attrs.isSymbolicLink() ? EntryType.SYMBOLIC_LINK : EntryType.FILE;
+            EntryType type = attrs.isDirectory() ? EntryType.DIRECTORY : attrs.isSymbolicLink() ? EntryType.SYMBOLIC_LINK : attrs.isRegularFile() ? EntryType.FILE : EntryType.FIFO;
             String target = "", hash = "";
             if (type == EntryType.SYMBOLIC_LINK) target = Files.readSymbolicLink(rawEntry.path()).toString();
             if (type == EntryType.FILE) {
@@ -57,13 +61,20 @@ public final class FileScanner {
                     if (attrs.fileKey() == null) warnings.accept("Hardlink identity unavailable; stored as ordinary file: " + rawEntry.relative());
                 }
             }
-            BackupEntry entry = new BackupEntry(rawEntry.relative(), attrs.isDirectory(), attrs.isDirectory() ? 0 : attrs.size(),
+            BackupEntry entry = new BackupEntry(rawEntry.relative(), attrs.isDirectory(), (attrs.isDirectory() || type == EntryType.FIFO) ? 0 : attrs.size(),
                     attrs.lastModifiedTime().toMillis(), hash, rawEntry.permissions(), rawEntry.owner(), rawEntry.group(),
                     type, target, attrs.lastAccessTime().toMillis(), attrs.creationTime().toMillis());
             if (type == EntryType.FILE && attrs.fileKey() != null) byIdentity.put(attrs.fileKey(), entry);
             result.add(entry);
         }
         return result;
+    }
+
+    private static boolean isFifo(Path path) {
+        try {
+            Object mode = Files.getAttribute(path, "unix:mode", LinkOption.NOFOLLOW_LINKS);
+            return mode instanceof Integer bits && (bits & 0170000) == 0010000;
+        } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) { return false; }
     }
 
     private static String relative(Path root, Path path) { return root.relativize(path).toString().replace('\\', '/'); }

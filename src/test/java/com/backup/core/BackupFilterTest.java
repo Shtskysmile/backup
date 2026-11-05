@@ -9,6 +9,38 @@ class BackupFilterTest {
         return new BackupFilter(include, exclude, ext, noExt, names, after, before, min, max);
     }
 
+    private BackupFilter ownerFilter(String owners) {
+        return new BackupFilter("", "", "", false, "", owners, null, null, null, null);
+    }
+
+    @Test void ownerCriteriaIntersectWithOtherRules() {
+        var f = new BackupFilter("docs/**", "", "", false, "", "alice;root", null, null, null, null);
+        assertTrue(f.matches("docs/notes.txt", 1, 1, "alice"));
+        assertTrue(f.matches("docs/notes.txt", 1, 1, "ROOT"));
+        assertFalse(f.matches("docs/notes.txt", 1, 1, "bob"));
+        assertFalse(f.matches("docs/notes.txt", 1, 1, null));
+        assertFalse(f.matches("docs/notes.txt", 1, 1, ""));
+        assertFalse(f.matches("other/notes.txt", 1, 1, "alice"));
+    }
+
+    @Test void ownerNormalizationIsStableAndCaseInsensitive() {
+        var first = ownerFilter(" Alice ; BOB ;alice");
+        var second = ownerFilter("bob;alice");
+        assertEquals(first, second);
+        assertEquals(first.identity(), second.identity());
+        assertTrue(first.matches("file", 1, 1, "ALICE"));
+        assertFalse(first.isUnrestricted());
+        assertFalse(first.matches("file", 1, 1, "charlie"));
+        assertTrue(BackupFilter.all().matches("file", 1, 1, null));
+        assertTrue(ownerFilter("").matches("file", 1, 1, null));
+        assertTrue(ownerFilter("  ").matches("file", 1, 1, "anyone"));
+    }
+
+    @Test void ownerIdentityChangesWhenOwnersChange() {
+        assertNotEquals(ownerFilter("alice").identity(), ownerFilter("bob").identity());
+        assertNotEquals(ownerFilter("alice").identity(), BackupFilter.all().identity());
+    }
+
     @Test void emptyCriteriaAcceptAllFiles() {
         var f = BackupFilter.all();
         assertTrue(f.isUnrestricted());

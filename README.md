@@ -5,8 +5,8 @@ The interface contains Backup, Restore and Automation tabs; no server is needed.
 
 ## Features
 
-- Recursive file discovery, including symbolic and hard links where supported
-- File selection by relative path/name glob, extension, modification time and byte size
+- Recursive file discovery, including symbolic/hard links and POSIX FIFOs where supported
+- File selection by relative path/name glob, extension, modification time, byte size and owner
 - File metadata capture and best-effort restoration with warnings
 - ZIP and GZIP archives, with optional AES-GCM encryption
 - Manifest-based incremental backups grouped as one full backup plus up to nine increments
@@ -46,7 +46,7 @@ platform-dependent checks to record separately.
 Path globs use source-relative paths with `/`; name globs match only the basename.
 Separate alternatives with `;` (OR). Different criteria combine with AND, and path
 exclusions take precedence. Globs are case sensitive; extensions ignore case and
-an optional leading dot. Modification-time and byte-size bounds are inclusive.
+an optional leading dot. Modification-time and byte-size bounds are inclusive. Owner alternatives are exact, case-insensitive names separated by `;`; missing owner information does not match a nonempty owner condition.
 With extensions empty, the extensionless option unchecked means no type restriction;
 checked means only extensionless files. With extensions set, checking it additionally
 includes extensionless files. Dotfiles and names ending in a dot are extensionless.
@@ -93,3 +93,19 @@ outside the restore directory does not have its contents overwritten.
 ## Presentation handoff
 
 See [Claude Code PPT 制作说明](doc/Claude-Code-PPT制作说明.md) for the verified project facts, two-minute slide plan, screenshots, and eight-minute demonstration flow.
+
+## FIFO and platform-specific tests
+
+On a POSIX filesystem, FIFOs are archived as metadata-only entries and recreated with
+`mkfifo -m`; their byte streams are never opened. Access/modified times use bounded
+`touch -c -h` commands with whole-second precision. Creation time and unsupported
+attribute operations produce explicit warnings. If recreation fails, the original
+destination is preserved and snapshot metadata is not applied to that failed path.
+Devices and sockets remain outside this local implementation.
+
+Java 21 remains the compiler target. The 2026-11-05 macOS verification ran **81 tests**,
+with zero failures, errors or skips. Tests requiring unavailable POSIX attributes,
+symlinks, hardlinks, file identity or FIFO tools abort individually through JUnit
+assumptions on unsupported platforms, including Windows. Normal backup/encryption and
+portable failure-path tests still run. This is capability-based test adaptation; it
+does not claim Windows hardlink fidelity or actual Windows validation.

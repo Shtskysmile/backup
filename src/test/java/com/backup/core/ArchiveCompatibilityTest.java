@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.zip.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static com.backup.testing.FileSystemCapabilities.*;
 
 /** Fixtures deliberately do not use the current archive or manifest writers. */
 class ArchiveCompatibilityTest {
@@ -103,9 +104,12 @@ class ArchiveCompatibilityTest {
     @Test void encryptedGzipPreservesLinks() throws Exception { encryptedLinks(CompressionType.GZIP); }
 
     private void encryptedLinks(CompressionType compression) throws Exception {
+        assumeHardLinks(temp);
+        assumeSymbolicLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
         Files.writeString(source.resolve("a"), "linked data");
         Files.createLink(source.resolve("hard"), source.resolve("a"));
+        assumeFileKeys(source.resolve("a"));
         Files.createSymbolicLink(source.resolve("relative"), Path.of("a"));
         Files.createSymbolicLink(source.resolve("broken"), Path.of("missing"));
         char[] password = "fixture-password".toCharArray();
