@@ -83,9 +83,11 @@ produce warnings instead of receiving unrelated snapshot metadata.
 
 Restoration recreates supported links and attempts permissions, owner/group,
 modification/access/creation times. Unsupported filesystem operations or insufficient
-privileges produce warnings; these capabilities vary by platform. For safety,
-owner/group/permission changes are skipped for symbolic links with an explicit
-warning because some platforms can follow the link despite no-follow options.
+privileges produce warnings; these capabilities vary by platform. Symbolic-link attributes are checked before changes: matching owner/group/mode
+produce no warning. POSIX ownership uses no-follow setters; differing macOS link
+modes use bounded `chmod -h` and are verified afterwards. The unsafe JDK symlink
+permission setter is not used. Unsupported or failed attribute changes still
+produce specific warnings while protecting the external target.
 Destination symlinks are refused. Regular files are replaced atomically so an existing hard link
 outside the restore directory does not have its contents overwritten.
 
@@ -103,7 +105,7 @@ attribute operations produce explicit warnings. If recreation fails, the origina
 destination is preserved and snapshot metadata is not applied to that failed path.
 Devices and sockets remain outside this local implementation.
 
-Java 21 remains the compiler target. The 2026-11-05 macOS verification ran **81 tests**,
+Java 21 remains the compiler target. The 2026-11-05 macOS verification ran **87 tests**,
 with zero failures, errors or skips. Tests requiring unavailable POSIX attributes,
 symlinks, hardlinks, file identity or FIFO tools abort individually through JUnit
 assumptions on unsupported platforms, including Windows. Normal backup/encryption and
