@@ -7,6 +7,9 @@ import java.util.*;
 import java.util.function.Consumer;
 
 public final class FileScanner {
+    private static final int TYPE_MASK = 0170000;
+    private static final boolean IS_MAC = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
+
     public List<BackupEntry> scan(Path root) throws IOException {
         return scan(root, BackupFilter.all(), ignored -> {});
     }
@@ -26,21 +29,18 @@ public final class FileScanner {
             }
             @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                 String relative = relative(normalizedRoot, file);
-                boolean fifo = !attrs.isRegularFile() && !attrs.isSymbolicLink() && isFifo(file);
-                if (!attrs.isRegularFile() && !attrs.isSymbolicLink() && !fifo) {
+                RawEntry rawEntry = capture(file, relative, attrs);
+                if (rawEntry.type() == null) {
                     warnings.accept("Skipped unsupported special file: " + relative);
-                } else {
-                    RawEntry entry = capture(file, relative, attrs);
-                    if (filter.matches(relative, fifo ? 0 : attrs.size(), attrs.lastModifiedTime().toMillis(), entry.owner())) {
-                        raw.put(relative, entry);
-                    }
+                } else if (filter.matches(relative, rawEntry.size(), attrs.lastModifiedTime().toMillis(), rawEntry.owner())) {
+                    raw.put(relative, rawEntry);
                 }
                 return FileVisitResult.CONTINUE;
             }
         });
         Set<String> needed = new HashSet<>();
         for (RawEntry entry : raw.values()) {
-            if (!entry.attrs().isDirectory()) {
+            if (entry.type() != EntryType.DIRECTORY) {
                 Path parent = Path.of(entry.relative()).getParent();
                 while (parent != null) { needed.add(parent.toString().replace('\\', '/')); parent = parent.getParent(); }
             }
@@ -49,8 +49,8 @@ public final class FileScanner {
         List<BackupEntry> result = new ArrayList<>();
         for (RawEntry rawEntry : raw.values()) {
             BasicFileAttributes attrs = rawEntry.attrs();
+            EntryType type = rawEntry.type();
             if (attrs.isDirectory() && !filter.isUnrestricted() && !needed.contains(rawEntry.relative())) continue;
-            EntryType type = attrs.isDirectory() ? EntryType.DIRECTORY : attrs.isSymbolicLink() ? EntryType.SYMBOLIC_LINK : attrs.isRegularFile() ? EntryType.FILE : EntryType.FIFO;
             String target = "", hash = "";
             if (type == EntryType.SYMBOLIC_LINK) target = Files.readSymbolicLink(rawEntry.path()).toString();
             if (type == EntryType.FILE) {
@@ -61,20 +61,14 @@ public final class FileScanner {
                     if (attrs.fileKey() == null) warnings.accept("Hardlink identity unavailable; stored as ordinary file: " + rawEntry.relative());
                 }
             }
-            BackupEntry entry = new BackupEntry(rawEntry.relative(), attrs.isDirectory(), (attrs.isDirectory() || type == EntryType.FIFO) ? 0 : attrs.size(),
+            if (type == EntryType.CHARACTER_DEVICE || type == EntryType.BLOCK_DEVICE) target = rawEntry.deviceTarget();
+            BackupEntry entry = new BackupEntry(rawEntry.relative(), attrs.isDirectory(), rawEntry.size(),
                     attrs.lastModifiedTime().toMillis(), hash, rawEntry.permissions(), rawEntry.owner(), rawEntry.group(),
                     type, target, attrs.lastAccessTime().toMillis(), attrs.creationTime().toMillis());
             if (type == EntryType.FILE && attrs.fileKey() != null) byIdentity.put(attrs.fileKey(), entry);
             result.add(entry);
         }
         return result;
-    }
-
-    private static boolean isFifo(Path path) {
-        try {
-            Object mode = Files.getAttribute(path, "unix:mode", LinkOption.NOFOLLOW_LINKS);
-            return mode instanceof Integer bits && (bits & 0170000) == 0010000;
-        } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) { return false; }
     }
 
     private static String relative(Path root, Path path) { return root.relativize(path).toString().replace('\\', '/'); }
@@ -88,7 +82,55 @@ public final class FileScanner {
             FileOwnerAttributeView view = Files.getFileAttributeView(path, FileOwnerAttributeView.class, LinkOption.NOFOLLOW_LINKS);
             if (view != null) owner = view.getOwner().getName();
         }
-        return new RawEntry(path, relative, attrs, permissions, owner, group);
+        EntryType type = attrs.isDirectory() ? EntryType.DIRECTORY
+                : attrs.isSymbolicLink() ? EntryType.SYMBOLIC_LINK
+                : attrs.isRegularFile() ? EntryType.FILE : classifySpecial(path, attrs);
+        String deviceTarget = type == EntryType.CHARACTER_DEVICE || type == EntryType.BLOCK_DEVICE
+                ? deviceNumber(path) : "";
+        long size = attrs.isDirectory() || (type != null && type != EntryType.FILE && type != EntryType.SYMBOLIC_LINK) ? 0 : attrs.size();
+        return new RawEntry(path, relative, attrs, size, permissions, owner, group, type, deviceTarget);
     }
-    private record RawEntry(Path path, String relative, BasicFileAttributes attrs, String permissions, String owner, String group) {}
+
+    /**
+     * Recognizes pipes, devices and sockets through POSIX type bits when the runtime exposes
+     * them ("unix:mode" on OpenJDK Unix platforms). Returns null for anything unclassifiable
+     * on the current platform.
+     */
+    private static EntryType classifySpecial(Path path, BasicFileAttributes attrs) {
+        if (attrs.isRegularFile() || attrs.isSymbolicLink() || attrs.isDirectory()) return null;
+        Integer mode = unixMode(path);
+        if (mode == null) return null;
+        return switch (mode & TYPE_MASK) {
+            case 0010000 -> EntryType.FIFO;
+            case 0020000 -> EntryType.CHARACTER_DEVICE;
+            case 0060000 -> EntryType.BLOCK_DEVICE;
+            case 0140000 -> EntryType.SOCKET;
+            default -> null;
+        };
+    }
+
+    private static Integer unixMode(Path path) {
+        try {
+            Object value = Files.getAttribute(path, "unix:mode", LinkOption.NOFOLLOW_LINKS);
+            return value instanceof Integer integer ? integer : null;
+        } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static String deviceNumber(Path path) {
+        try {
+            Object value = Files.getAttribute(path, "unix:rdev", LinkOption.NOFOLLOW_LINKS);
+            if (!(value instanceof Long rdev)) return "";
+            long major = IS_MAC ? (rdev >> 24) & 0xff : ((rdev >> 8) & 0xfff) | ((rdev >> 32) & ~0xfffL);
+            long minor = IS_MAC ? rdev & 0xffffff : (rdev & 0xff) | ((rdev >> 12) & ~0xffL);
+            if (major < 0 || minor < 0 || major > 65535 || minor > 65535) return "";
+            return major + ":" + minor;
+        } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
+            return "";
+        }
+    }
+
+    private record RawEntry(Path path, String relative, BasicFileAttributes attrs, long size,
+                            String permissions, String owner, String group, EntryType type, String deviceTarget) {}
 }

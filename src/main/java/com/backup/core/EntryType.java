@@ -1,3 +1,3 @@
 package com.backup.core;
 
-public enum EntryType { FILE, DIRECTORY, SYMBOLIC_LINK, HARD_LINK, FIFO }
+public enum EntryType { FILE, DIRECTORY, SYMBOLIC_LINK, HARD_LINK, FIFO, CHARACTER_DEVICE, BLOCK_DEVICE, SOCKET }
