@@ -32,10 +32,6 @@ final class SymbolicLinkPermissions {
     void restore(Path link, Set<PosixFilePermission> permissions) throws IOException {
         requireLink(link);
         if (Files.getPosixFilePermissions(link, LinkOption.NOFOLLOW_LINKS).equals(permissions)) return;
-s
-k
-i
-p
         if (!mutableLinkModes) throw new UnsupportedOperationException("Changing symbolic-link permissions is not supported on this platform");
         int mode = 0;
         // 权限集 → 八进制：BSD chmod -h 只改链接自身（lchmod 语义，绝不跟随）。
