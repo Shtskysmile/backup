@@ -14,11 +14,20 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /** POSIX pipe operations never open a pipe's data stream, including while restoring attributes. */
+/**
+ * POSIX 管道（FIFO）支持：核心不变量是【任何代码路径都不打开管道的数据流】——
+ * 打开读端会阻塞到有写者出现，备份/还原若误读管道即永久挂死。
+ *
+ * <p>创建：mkfifo -m 八进制权限（权限从清单的 POSIX 串换算，缺省 0600），
+ * 创建后用属性位复核"真的建出了 FIFO"（防 mkfifo 假成功）；注入式构造器允许测试
+ * 替换 mkfifo/touch 以模拟失败、超时与假成功路径。</p>
+ */
 final class FifoSupport {
     private static final DateTimeFormatter TOUCH_TIME = DateTimeFormatter.ofPattern("uuuuMMddHHmm.ss").withZone(ZoneOffset.UTC);
     private final String mkfifo;
     private final String touch;
 
+    /** 默认工具：PATH 中的 mkfifo/touch；注入构造器供测试替换。 */
     FifoSupport() { this("mkfifo", "touch"); }
     FifoSupport(String mkfifo, String touch) { this.mkfifo = mkfifo; this.touch = touch; }
 
@@ -31,6 +40,7 @@ final class FifoSupport {
 
     void create(BackupEntry entry, Path staged) throws IOException {
         int mode = 0600;
+        // 权限换算：清单里的 POSIX 串 → mkfifo -m 八进制；缺省 0600。
         if (!entry.permissions().isBlank()) {
             mode = 0;
             for (PosixFilePermission permission : PosixFilePermissions.fromString(entry.permissions())) {
@@ -42,7 +52,9 @@ final class FifoSupport {
             }
         }
         run(List.of(mkfifo, "-m", Integer.toOctalString(mode), staged.toString()));
+        // mkfifo -m 一次建出正确权限的管道节点（之后不再 chmod，减少工具依赖）。
         if (!isFifo(staged)) throw new IOException("mkfifo did not create a FIFO");
+        // 假成功防护：exit 0 不代表节点类型正确，必须用类型位复核。
     }
 
     void restoreTimes(BackupEntry entry, Path path, Consumer<String> warnings) {
@@ -51,6 +63,7 @@ final class FifoSupport {
         if (entry.creationMillis() != null) warnings.accept(entry.relativePath() + ": FIFO creation time is not restored on this platform");
     }
 
+    /** 用 touch -c -h 恢复管道时间：不打开流；工具缺失/失败由调用方转为警告。 */
     private void restoreTime(BackupEntry entry, Path path, String flag, long millis, String name, Consumer<String> warnings) {
         try {
             // -h prevents following a replaced symlink; UTC avoids local DST ambiguity.
@@ -61,6 +74,7 @@ final class FifoSupport {
         }
     }
 
+    /** 外部工具执行：收集输出 + 超时保护，非零退出抛 IOException。 */
     private void run(List<String> command) throws IOException {
         Path log = Files.createTempFile("backup-fifo-command-", ".log");
         Process process = null;

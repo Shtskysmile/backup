@@ -15,11 +15,16 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * 备份服务编排测试：增量只含变化条目、任务/进程隔离不续链、加密口令正确性、
+ * 归档命名防冲突。
+ */
 class BackupServiceTest {
     @TempDir
     Path tempDirectory;
 
     @Test
+    /** 用例 zipBackupRestoresFilesAndMetadata：备份编排（增量/隔离/加密/命名） 的具体场景，断言即预期行为。 */
     void zipBackupRestoresFilesAndMetadata() throws IOException {
         Path source = Files.createDirectory(tempDirectory.resolve("source"));
         Path destination = Files.createDirectory(tempDirectory.resolve("backups"));
@@ -39,6 +44,7 @@ class BackupServiceTest {
     }
 
     @Test
+    /** 用例 encryptedGzipBackupRequiresTheCorrectPassphrase：备份编排（增量/隔离/加密/命名） 的具体场景，断言即预期行为。 */
     void encryptedGzipBackupRequiresTheCorrectPassphrase() throws IOException {
         Path source = Files.createDirectory(tempDirectory.resolve("source"));
         Path destination = Files.createDirectory(tempDirectory.resolve("backups"));
@@ -57,6 +63,7 @@ class BackupServiceTest {
     }
 
     @Test
+    /** 用例 incrementalBackupContainsOnlyChangedFilesAndDirectories：备份编排（增量/隔离/加密/命名） 的具体场景，断言即预期行为。 */
     void incrementalBackupContainsOnlyChangedFilesAndDirectories() throws IOException {
         Path source = Files.createDirectory(tempDirectory.resolve("source"));
         Path destination = Files.createDirectory(tempDirectory.resolve("backups"));
@@ -86,6 +93,7 @@ class BackupServiceTest {
     }
 
     @Test
+    /** 用例 destinationCannotBeInsideSource：备份编排（增量/隔离/加密/命名） 的具体场景，断言即预期行为。 */
     void destinationCannotBeInsideSource() throws IOException {
         Path source = Files.createDirectory(tempDirectory.resolve("source"));
         Path destination = Files.createDirectory(source.resolve("backups"));

@@ -13,6 +13,18 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static com.backup.testing.FileSystemCapabilities.*;
 
+/**
+ * 软链接属性回归测试：链接自身属性先比对后恢复（一致不动），
+ * macOS chmod -h 生效路径与平台不支持路径的警告行为，外部目标零影响。
+ *
+ * 用例清单（6 项）：
+ * - alreadyMatchingLinkAttributesDoNotReportSpuriousWarnings
+ * - differingMacLinkPermissionsAreRestoredWithoutChangingTarget
+ * - differingBrokenLinkPermissionsCanBeRestoredWithoutCreatingTarget
+ * - directoryLinkPermissionRestorationDoesNotChangeDirectoryTarget
+ * - failedNoFollowPermissionCommandLeavesTargetUntouchedAndReportsReason
+ * - unknownLinkOwnerProducesSpecificFailureRatherThanBlanketSkip
+ */
 class SymbolicLinkMetadataTest {
     @TempDir Path temp;
 
@@ -20,6 +32,7 @@ class SymbolicLinkMetadataTest {
         return new BackupService().backup(new BackupOptions(source, temp.resolve("backups"), "links", CompressionType.ZIP, false, false, null));
     }
 
+    /** 用例 alreadyMatchingLinkAttributesDoNotReportSpuriousWarnings：软链接自身属性 的具体场景，断言即预期行为。 */
     @Test void alreadyMatchingLinkAttributesDoNotReportSpuriousWarnings() throws Exception {
         assumeSymbolicLinks(temp); assumeDirectorySymbolicLinks(temp); assumePosix(temp);
         Path outside = Files.writeString(temp.resolve("outside"), "sentinel");
@@ -45,6 +58,7 @@ class SymbolicLinkMetadataTest {
         assertTrue(chmod.waitFor(5, TimeUnit.SECONDS)); assertEquals(0, chmod.exitValue());
     }
 
+    /** 用例 differingMacLinkPermissionsAreRestoredWithoutChangingTarget：软链接自身属性 的具体场景，断言即预期行为。 */
     @Test void differingMacLinkPermissionsAreRestoredWithoutChangingTarget() throws Exception {
         assumeSymbolicLinks(temp); assumePosix(temp);
         Path outside = Files.writeString(temp.resolve("outside"), "sentinel");
@@ -63,6 +77,7 @@ class SymbolicLinkMetadataTest {
         assertEquals("sentinel", Files.readString(outside));
     }
 
+    /** 用例 differingBrokenLinkPermissionsCanBeRestoredWithoutCreatingTarget：软链接自身属性 的具体场景，断言即预期行为。 */
     @Test void differingBrokenLinkPermissionsCanBeRestoredWithoutCreatingTarget() throws Exception {
         assumeSymbolicLinks(temp); assumePosix(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
@@ -74,6 +89,7 @@ class SymbolicLinkMetadataTest {
         assertEquals(List.of(), restored.warnings());
     }
 
+    /** 用例 directoryLinkPermissionRestorationDoesNotChangeDirectoryTarget：软链接自身属性 的具体场景，断言即预期行为。 */
     @Test void directoryLinkPermissionRestorationDoesNotChangeDirectoryTarget() throws Exception {
         assumeDirectorySymbolicLinks(temp); assumePosix(temp);
         Path outside = Files.createDirectory(temp.resolve("outside"));
@@ -92,6 +108,7 @@ class SymbolicLinkMetadataTest {
         assertEquals(List.of(), restored.warnings());
     }
 
+    /** 用例 failedNoFollowPermissionCommandLeavesTargetUntouchedAndReportsReason：软链接自身属性 的具体场景，断言即预期行为。 */
     @Test void failedNoFollowPermissionCommandLeavesTargetUntouchedAndReportsReason() throws Exception {
         assumeSymbolicLinks(temp); assumePosix(temp);
         Path outside = Files.writeString(temp.resolve("outside"), "keep");
@@ -107,6 +124,7 @@ class SymbolicLinkMetadataTest {
         assertTrue(Files.isSymbolicLink(link));
     }
 
+    /** 用例 unknownLinkOwnerProducesSpecificFailureRatherThanBlanketSkip：软链接自身属性 的具体场景，断言即预期行为。 */
     @Test void unknownLinkOwnerProducesSpecificFailureRatherThanBlanketSkip() throws Exception {
         assumeSymbolicLinks(temp); assumePosix(temp);
         Path source = Files.createDirectory(temp.resolve("source"));

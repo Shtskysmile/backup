@@ -11,6 +11,14 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+/**
+ * 属主筛选专项测试：跨平台读取真实属主并按其筛选（含不区分大小写、
+ * 不存在属主全排除、属主与其它条件 AND 组合）。
+ *
+ * 用例清单（2 项）：
+ * - scannerSelectsRecordedOwnerAndKeepsRequiredAncestors
+ * - scannerRejectsNonmatchingOwnersAndPrunesUnusedDirectories
+ */
 class OwnerSelectionTest {
     @TempDir Path temp;
 
@@ -18,6 +26,7 @@ class OwnerSelectionTest {
         return new BackupFilter("", "", "", false, "", owners, null, null, null, null);
     }
 
+    /** 用例 scannerSelectsRecordedOwnerAndKeepsRequiredAncestors：属主筛选 的具体场景，断言即预期行为。 */
     @Test void scannerSelectsRecordedOwnerAndKeepsRequiredAncestors() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path docs = Files.createDirectory(source.resolve("docs"));
@@ -33,6 +42,7 @@ class OwnerSelectionTest {
         assertEquals(owner, selected.get(1).owner());
     }
 
+    /** 用例 scannerRejectsNonmatchingOwnersAndPrunesUnusedDirectories：属主筛选 的具体场景，断言即预期行为。 */
     @Test void scannerRejectsNonmatchingOwnersAndPrunesUnusedDirectories() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path docs = Files.createDirectory(source.resolve("docs"));

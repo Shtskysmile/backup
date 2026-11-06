@@ -11,10 +11,16 @@ public final class HashUtils {
     private HashUtils() {
     }
 
+    /**
+     * 计算文件 SHA-256：64KB 固定缓冲流式读取——内存占用与文件大小无关（GB 级文件安全）。
+     * SHA-256 是增量判定与还原校验的统一指纹，碰撞概率在工程上可忽略。
+     */
     public static String sha256(Path file) throws IOException {
         MessageDigest digest = newDigest();
+        // 流式读取：64KB 缓冲，内存占用恒定；读完一次性 toHex。
         byte[] buffer = new byte[64 * 1024];
         try (InputStream inputStream = Files.newInputStream(file)) {
+        // 循环读入并喂给摘要；没有一次性读入整个文件。
             int read;
             while ((read = inputStream.read(buffer)) != -1) {
                 digest.update(buffer, 0, read);
@@ -23,6 +29,7 @@ public final class HashUtils {
         return toHex(digest.digest());
     }
 
+    /** 每次哈希新摘要实例（MessageDigest 非线程安全）。 */
     private static MessageDigest newDigest() {
         try {
             return MessageDigest.getInstance("SHA-256");
@@ -31,6 +38,7 @@ public final class HashUtils {
         }
     }
 
+    /** 字节数组 → 小写十六进制（清单/比较统一形态）。 */
     private static String toHex(byte[] bytes) {
         StringBuilder builder = new StringBuilder(bytes.length * 2);
         for (byte b : bytes) {

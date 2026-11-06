@@ -22,10 +22,26 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** End-to-end checks for the cloud backup flow: TLS, accounts, metadata, increments and retention. */
+/**
+ * 网络备份端到端集成：起真实 HTTPS 服务器（随机端口）→ 账号 → TLS/认证 →
+ * 全量+增量往返 → 加密链 → 服务器端保留 → 整组删除保护 → 账号隔离 →
+ * 提交防篡改。keytool 不可用时按能力跳过。
+ *
+ * 用例清单（8 项）：
+ * - authenticatedPingAndWrongPasswordFailure
+ * - plainHttpIsRejectedBecauseTheServerSpeaksTlsOnly
+ * - fullThenIncrementalBackupRestoresAcrossServerChain
+ * - encryptedArchivesTravelAndRestoreWithThePassphrase
+ * - serverSideRetentionPrunesWholeOldGroups
+ * - groupDeleteRemovesHistoryButProtectsTheNewestGroup
+ * - accountsAreIsolatedPerUser
+ * - tamperedCommitPayloadIsRejected
+ */
 class NetworkBackupIntegrationTest {
     @TempDir Path temp;
     private NetworkBackupServer server;
 
+    /** 起随机端口服务器（keytool 可用性守卫），用例结束由 @AfterEach 关闭。 */
     private NetworkBackupServer startServer() throws Exception {
         assumeTrue(keytoolAvailable(), "keytool is required to provision the server certificate");
         server = NetworkBackupServer.start(0, temp.resolve("storage"));
@@ -37,6 +53,7 @@ class NetworkBackupIntegrationTest {
         return Files.isRegularFile(Path.of(System.getProperty("java.home"), "bin", name));
     }
 
+    /** 构造已钉定信任的客户端：信任文件 = 服务器自生成密钥库。 */
     private NetworkBackupClient connect(NetworkBackupServer running, String username, char[] password) throws IOException {
         return new NetworkBackupClient("localhost", running.port(), username, password,
                 running.storageRoot().resolve(NetworkBackupServer.KEYSTORE_FILE), NetworkBackupServer.KEYSTORE_PASSWORD);
@@ -46,6 +63,7 @@ class NetworkBackupIntegrationTest {
         if (server != null) server.close();
     }
 
+    /** 双层样本源：根文件 + 子目录文件，内容可参数化（增量用）。 */
     private Path sampleSource(String name, String content) throws IOException {
         Path source = Files.createDirectories(temp.resolve(name));
         Files.writeString(source.resolve("notes.txt"), content);
@@ -54,11 +72,13 @@ class NetworkBackupIntegrationTest {
         return source;
     }
 
+    /** 网络备份参数：destination 占位（网络模式不用本地目标）。 */
     private BackupOptions options(Path source, String name, boolean incremental, boolean encrypted, char[] passphrase) {
         return new BackupOptions(source, temp.resolve("unused-destination"), name, CompressionType.ZIP,
                 incremental, encrypted, passphrase);
     }
 
+    /** 用例 authenticatedPingAndWrongPasswordFailure：网络备份端到端 的具体场景，断言即预期行为。 */
     @Test void authenticatedPingAndWrongPasswordFailure() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -76,6 +96,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
+    /** 用例 plainHttpIsRejectedBecauseTheServerSpeaksTlsOnly：网络备份端到端 的具体场景，断言即预期行为。 */
     @Test void plainHttpIsRejectedBecauseTheServerSpeaksTlsOnly() throws Exception {
         NetworkBackupServer running = startServer();
         HttpClient plain = HttpClient.newBuilder().build();
@@ -83,6 +104,7 @@ class NetworkBackupIntegrationTest {
         assertThrows(IOException.class, () -> plain.send(request, HttpResponse.BodyHandlers.ofString()));
     }
 
+    /** 用例 fullThenIncrementalBackupRestoresAcrossServerChain：网络备份端到端 的具体场景，断言即预期行为。 */
     @Test void fullThenIncrementalBackupRestoresAcrossServerChain() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -90,11 +112,13 @@ class NetworkBackupIntegrationTest {
         NetworkBackupService service = new NetworkBackupService();
         try (NetworkBackupClient client = connect(running, "alice", "secret".toCharArray())) {
             NetworkBackupService.NetworkBackupResult full = service.backup(client, options(source, "proj", true, false, null), 0);
+        // 第一轮全量：3+ 条目（含目录）。
             assertTrue(full.full());
             assertTrue(full.archivedEntries() >= 3);
             Files.writeString(source.resolve("notes.txt"), "one-two");
             Files.writeString(source.resolve("extra.txt"), "new");
             NetworkBackupService.NetworkBackupResult increment = service.backup(client, options(source, "proj", true, false, null), 0);
+        // 第二轮增量：只应含变化的 notes.txt + 新增 extra.txt + 目录。
             assertFalse(increment.full());
             // Directories always travel with an increment, like the local service.
             assertEquals(3, increment.archivedEntries());
@@ -121,6 +145,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
+    /** 用例 encryptedArchivesTravelAndRestoreWithThePassphrase：网络备份端到端 的具体场景，断言即预期行为。 */
     @Test void encryptedArchivesTravelAndRestoreWithThePassphrase() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -150,6 +175,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
+    /** 用例 serverSideRetentionPrunesWholeOldGroups：网络备份端到端 的具体场景，断言即预期行为。 */
     @Test void serverSideRetentionPrunesWholeOldGroups() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -157,6 +183,7 @@ class NetworkBackupIntegrationTest {
         NetworkBackupService service = new NetworkBackupService();
         try (NetworkBackupClient client = connect(running, "alice", "secret".toCharArray())) {
             for (int i = 0; i < 12; i++) {
+            // 12 连备：第 11 次强制新组，keepGroups=1 时旧组应在服务器端被整组淘汰。
                 Files.writeString(source.resolve("notes.txt"), "seed-" + i);
                 service.backup(client, options(source, "rotate", true, false, null), 1);
             }
@@ -172,6 +199,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
+    /** 用例 groupDeleteRemovesHistoryButProtectsTheNewestGroup：网络备份端到端 的具体场景，断言即预期行为。 */
     @Test void groupDeleteRemovesHistoryButProtectsTheNewestGroup() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -194,6 +222,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
+    /** 用例 accountsAreIsolatedPerUser：网络备份端到端 的具体场景，断言即预期行为。 */
     @Test void accountsAreIsolatedPerUser() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -205,11 +234,13 @@ class NetworkBackupIntegrationTest {
             service.backup(alice, options(source, "mine", false, false, null), 0);
             assertEquals(1, alice.listSnapshots().size());
             assertEquals(0, bob.listSnapshots().size());
+        // 隔离断言：bob 看不到 alice 的任何快照（目录级隔离）。
             Path stolen = temp.resolve("stolen");
             assertThrows(IOException.class, () -> bob.download("anything.zip", stolen));
         }
     }
 
+    /** 用例 tamperedCommitPayloadIsRejected：网络备份端到端 的具体场景，断言即预期行为。 */
     @Test void tamperedCommitPayloadIsRejected() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());

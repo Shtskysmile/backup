@@ -11,11 +11,26 @@ import static org.junit.jupiter.api.Assertions.*;
 import static com.backup.testing.FileSystemCapabilities.*;
 
 /** Fixtures deliberately do not use the current archive or manifest writers. */
+/**
+ * v1 旧格式兼容与对抗测试：手写 v1 ZIP/GZIP 样本（不经当前写入器）验证可读性；
+ * 恶意清单（穿越路径/重复路径/非法数字/重复载荷）必须在写入任何文件前被拒绝。
+ *
+ * 用例清单（8 项）：
+ * - restoresHandcraftedVersionOneZipWithoutInventingAbsentTimes
+ * - restoresHandcraftedVersionOneGzip
+ * - traversalManifestCannotOverwriteOutsideFile
+ * - duplicatePayloadIsRejectedEvenWhenManifestCountPermitsTwoRecords
+ * - duplicateManifestPathsAreRejectedBeforePayloadWrites
+ * - malformedManifestReportsIoFailureBeforePayloadWrites
+ * - encryptedZipPreservesLinks
+ * - encryptedGzipPreservesLinks
+ */
 class ArchiveCompatibilityTest {
     @TempDir Path temp;
     private static final byte[] CONTENT = "legacy fixture\n".getBytes(StandardCharsets.UTF_8);
     private static final long MODIFIED = 1_600_000_000_000L;
 
+    /** 手写 v1 清单模板：固定时间戳/单条目，用 replace 注入变体。 */
     private String manifest(String compression, String path) {
         return "version=1\nsourceRoot=/old/source\ncreatedAt=2020-09-13T12:26:40Z\n"
                 + "compressionType=" + compression + "\nincremental=false\nencrypted=false\nentry.count=1\n"
@@ -23,6 +38,7 @@ class ArchiveCompatibilityTest {
                 + "\nentry.0.lastModifiedMillis=" + MODIFIED + "\n";
     }
 
+    /** 手工拼 v1 ZIP：清单顶置 + 可选载荷（payload=null 模拟缺载荷攻击）。 */
     private Path zip(String name, String manifest, String payload) throws IOException {
         Path archive = temp.resolve(name);
         try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(archive))) {
@@ -39,6 +55,7 @@ class ArchiveCompatibilityTest {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8); out.writeInt(bytes.length); out.write(bytes);
     }
 
+    /** 手工拼 v1 GZIP 容器：魔数/长度/条目数逐字段写出。 */
     private Path gzip(String name, String manifest, String payload, int count) throws IOException {
         Path archive = temp.resolve(name);
         try (DataOutputStream out = new DataOutputStream(new GZIPOutputStream(Files.newOutputStream(archive)))) {
@@ -52,6 +69,7 @@ class ArchiveCompatibilityTest {
         return archive;
     }
 
+    /** 用例 restoresHandcraftedVersionOneZipWithoutInventingAbsentTimes：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
     @Test void restoresHandcraftedVersionOneZipWithoutInventingAbsentTimes() throws Exception {
         Path out = temp.resolve("out");
         BackupManifest result = new ArchiveService().restore(zip("old.zip", manifest("ZIP", "old.txt"), "old.txt"), out);
@@ -62,6 +80,7 @@ class ArchiveCompatibilityTest {
         assertNull(result.entries().getFirst().creationMillis());
     }
 
+    /** 用例 restoresHandcraftedVersionOneGzip：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
     @Test void restoresHandcraftedVersionOneGzip() throws Exception {
         Path out = temp.resolve("out");
         BackupManifest result = new ArchiveService().restore(gzip("old.gz", manifest("GZIP", "old.txt"), "old.txt", 1), out);
@@ -70,6 +89,7 @@ class ArchiveCompatibilityTest {
         assertEquals(CompressionType.GZIP, result.compressionType());
     }
 
+    /** 用例 traversalManifestCannotOverwriteOutsideFile：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
     @Test void traversalManifestCannotOverwriteOutsideFile() throws Exception {
         Path sentinel = Files.writeString(temp.resolve("outside"), "keep");
         Path archive = zip("hostile.zip", manifest("ZIP", "../outside"), "../outside");
@@ -77,6 +97,7 @@ class ArchiveCompatibilityTest {
         assertEquals("keep", Files.readString(sentinel));
     }
 
+    /** 用例 duplicatePayloadIsRejectedEvenWhenManifestCountPermitsTwoRecords：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
     @Test void duplicatePayloadIsRejectedEvenWhenManifestCountPermitsTwoRecords() throws Exception {
         String manifest = manifest("GZIP", "old.txt").replace("entry.count=1", "entry.count=2")
                 + "entry.1.path=other.txt\nentry.1.size=" + CONTENT.length + "\n";
@@ -85,6 +106,7 @@ class ArchiveCompatibilityTest {
         assertTrue(error.getMessage().contains("duplicate"));
     }
 
+    /** 用例 duplicateManifestPathsAreRejectedBeforePayloadWrites：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
     @Test void duplicateManifestPathsAreRejectedBeforePayloadWrites() throws Exception {
         String text = manifest("ZIP", "old.txt").replace("entry.count=1", "entry.count=2")
                 + "entry.1.path=old.txt\nentry.1.size=" + CONTENT.length + "\n";
@@ -93,6 +115,7 @@ class ArchiveCompatibilityTest {
         assertFalse(Files.exists(out.resolve("old.txt")));
     }
 
+    /** 用例 malformedManifestReportsIoFailureBeforePayloadWrites：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
     @Test void malformedManifestReportsIoFailureBeforePayloadWrites() throws Exception {
         Path out = temp.resolve("out");
         Path archive = zip("malformed.zip", manifest("ZIP", "old.txt").replace("entry.0.size=" + CONTENT.length, "entry.0.size=not-a-number"), "old.txt");
@@ -100,7 +123,9 @@ class ArchiveCompatibilityTest {
         assertFalse(Files.exists(out.resolve("old.txt")));
     }
 
+    /** 用例 encryptedZipPreservesLinks：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
     @Test void encryptedZipPreservesLinks() throws Exception { encryptedLinks(CompressionType.ZIP); }
+    /** 用例 encryptedGzipPreservesLinks：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
     @Test void encryptedGzipPreservesLinks() throws Exception { encryptedLinks(CompressionType.GZIP); }
 
     private void encryptedLinks(CompressionType compression) throws Exception {

@@ -3,16 +3,36 @@ package com.backup.core;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * 筛选引擎语义测试：六维条件的 OR/AND/排除优先、glob 展开（双星零层目录）、
+ * 扩展名/无扩展名规则、属主匹配与归一化、identity 稳定性、非法参数前置拒绝。
+ *
+ * 用例清单（11 项）：
+ * - ownerCriteriaIntersectWithOtherRules
+ * - ownerNormalizationIsStableAndCaseInsensitive
+ * - ownerIdentityChangesWhenOwnersChange
+ * - emptyCriteriaAcceptAllFiles
+ * - pathAlternativesAndExclusionHaveExpectedGlobSemantics
+ * - criteriaIntersectAndBoundsAreInclusive
+ * - extensionlessOptionCanStandAloneOrJoinExtensions
+ * - namesMatchBasenameAndSupportStandardGlobConstructs
+ * - directoryExclusionsPruneSubtreeRootsWithoutApplyingOtherCriteria
+ * - normalizationProducesStableImmutableIdentity
+ * - invalidCriteriaFailBeforeScanning
+ */
 class BackupFilterTest {
+    /** 9 参便捷构造（不含属主）。 */
     private BackupFilter filter(String include, String exclude, String ext, boolean noExt, String names,
                                 Long after, Long before, Long min, Long max) {
         return new BackupFilter(include, exclude, ext, noExt, names, after, before, min, max);
     }
 
+    /** 仅属主条件的构造（其余全空）。 */
     private BackupFilter ownerFilter(String owners) {
         return new BackupFilter("", "", "", false, "", owners, null, null, null, null);
     }
 
+    /** 用例 ownerCriteriaIntersectWithOtherRules：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void ownerCriteriaIntersectWithOtherRules() {
         var f = new BackupFilter("docs/**", "", "", false, "", "alice;root", null, null, null, null);
         assertTrue(f.matches("docs/notes.txt", 1, 1, "alice"));
@@ -23,6 +43,7 @@ class BackupFilterTest {
         assertFalse(f.matches("other/notes.txt", 1, 1, "alice"));
     }
 
+    /** 用例 ownerNormalizationIsStableAndCaseInsensitive：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void ownerNormalizationIsStableAndCaseInsensitive() {
         var first = ownerFilter(" Alice ; BOB ;alice");
         var second = ownerFilter("bob;alice");
@@ -36,11 +57,13 @@ class BackupFilterTest {
         assertTrue(ownerFilter("  ").matches("file", 1, 1, "anyone"));
     }
 
+    /** 用例 ownerIdentityChangesWhenOwnersChange：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void ownerIdentityChangesWhenOwnersChange() {
         assertNotEquals(ownerFilter("alice").identity(), ownerFilter("bob").identity());
         assertNotEquals(ownerFilter("alice").identity(), BackupFilter.all().identity());
     }
 
+    /** 用例 emptyCriteriaAcceptAllFiles：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void emptyCriteriaAcceptAllFiles() {
         var f = BackupFilter.all();
         assertTrue(f.isUnrestricted());
@@ -50,6 +73,7 @@ class BackupFilterTest {
         assertFalse(f.excludesDirectory("anything"));
     }
 
+    /** 用例 pathAlternativesAndExclusionHaveExpectedGlobSemantics：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void pathAlternativesAndExclusionHaveExpectedGlobSemantics() {
         var f = filter("docs/**/*.txt;图片/**", "**/private/**", "", false, "", null, null, null, null);
         assertTrue(f.matches("docs/readme.txt", 1, 1));
@@ -62,6 +86,7 @@ class BackupFilterTest {
         assertFalse(shallow.matches("docs/nested/a.txt", 1, 1));
     }
 
+    /** 用例 criteriaIntersectAndBoundsAreInclusive：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void criteriaIntersectAndBoundsAreInclusive() {
         var f = filter("docs/**", "**/skip*", ".TXT;pdf", false, "report*;总结*", 10L, 20L, 5L, 8L);
         assertTrue(f.matches("docs/report.TXT", 5, 10));
@@ -75,6 +100,7 @@ class BackupFilterTest {
         assertFalse(f.matches("else/report.txt", 5, 10));
     }
 
+    /** 用例 extensionlessOptionCanStandAloneOrJoinExtensions：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void extensionlessOptionCanStandAloneOrJoinExtensions() {
         var only = filter("", "", "", true, "", null, null, null, null);
         assertTrue(only.matches("README", 1, 0));
@@ -88,6 +114,7 @@ class BackupFilterTest {
         assertFalse(mixed.matches("a.pdf", 1, 0));
     }
 
+    /** 用例 namesMatchBasenameAndSupportStandardGlobConstructs：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void namesMatchBasenameAndSupportStandardGlobConstructs() {
         var f = filter("", "", "", false, "报告?.{txt,pdf};file[0-9].txt", null, null, null, null);
         assertTrue(f.matches("子目录/报告一.pdf", 1, 0));
@@ -96,6 +123,7 @@ class BackupFilterTest {
         assertFalse(f.matches("filex.txt", 1, 0));
     }
 
+    /** 用例 directoryExclusionsPruneSubtreeRootsWithoutApplyingOtherCriteria：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void directoryExclusionsPruneSubtreeRootsWithoutApplyingOtherCriteria() {
         var f = filter("docs/**", "cache/**;**/tmp/**;secret*", "txt", false, "report*", 10L, null, 100L, null);
         assertTrue(f.excludesDirectory("cache"));
@@ -107,6 +135,7 @@ class BackupFilterTest {
         assertFalse(f.excludesDirectory("cacheable"));
     }
 
+    /** 用例 normalizationProducesStableImmutableIdentity：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void normalizationProducesStableImmutableIdentity() {
         var first = filter(" b/** ;a/**;b/** ", null, " .TXT;pdf;txt ", false, " x* ; y* ", null, null, 0L, null);
         var second = filter("a/**;b/**", "", "pdf;txt", false, "y*;x*", null, null, 0L, null);
@@ -116,6 +145,7 @@ class BackupFilterTest {
         assertEquals(BackupFilter.all(), filter(null, null, null, false, null, null, null, null, null));
     }
 
+    /** 用例 invalidCriteriaFailBeforeScanning：六维筛选语义 的具体场景，断言即预期行为。 */
     @Test void invalidCriteriaFailBeforeScanning() {
         assertThrows(IllegalArgumentException.class, () -> filter("[", "", "", false, "", null, null, null, null));
         assertThrows(IllegalArgumentException.class, () -> filter("", "{a", "", false, "", null, null, null, null));

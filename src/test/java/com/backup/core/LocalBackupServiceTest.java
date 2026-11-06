@@ -9,12 +9,26 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static com.backup.testing.FileSystemCapabilities.*;
 
+/**
+ * 本地备份服务级测试：筛选后硬链接载荷选择与父目录保留、任务隔离、
+ * 保留轮换 12 连备、失败不淘汰、属主扫描筛选、源别名防内嵌目标。
+ *
+ * 用例清单（6 项）：
+ * - filtersBeforeChoosingHardlinkPayloadAndKeepsAncestors
+ * - changingTaskOrRestartingNeverReusesAnotherBaseline
+ * - retentionRollsGroupsAndKeepsWholeLatestGroup
+ * - failedBackupDoesNotPrunePreviousSuccess
+ * - metadataOnlyChangesAreIncludedInIncremental
+ * - sourceAliasCannotPlaceDestinationInsideSource
+ */
 class LocalBackupServiceTest {
     @TempDir Path temp;
+    /** 统一参数：ZIP、目标=backups、可配增量/保留/筛选。 */
     private BackupOptions options(Path source, String name, boolean incremental, int keep, BackupFilter filter) {
         return new BackupOptions(source, temp.resolve("backups"), name, CompressionType.ZIP, incremental, false, null, filter, keep);
     }
 
+    /** 用例 filtersBeforeChoosingHardlinkPayloadAndKeepsAncestors：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
     @Test void filtersBeforeChoosingHardlinkPayloadAndKeepsAncestors() throws Exception {
         assumeHardLinks(temp);
         Path source = Files.createDirectories(temp.resolve("source/docs"));
@@ -33,6 +47,7 @@ class LocalBackupServiceTest {
         assertEquals(2, BackupManifest.load(result.manifestPath()).entries().size());
     }
 
+    /** 用例 changingTaskOrRestartingNeverReusesAnotherBaseline：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
     @Test void changingTaskOrRestartingNeverReusesAnotherBaseline() throws Exception {
         Path first = Files.createDirectory(temp.resolve("first"));
         Path second = Files.createDirectory(temp.resolve("second"));
@@ -47,6 +62,7 @@ class LocalBackupServiceTest {
         assertEquals("same", Files.readString(out.resolve("file")));
     }
 
+    /** 用例 retentionRollsGroupsAndKeepsWholeLatestGroup：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
     @Test void retentionRollsGroupsAndKeepsWholeLatestGroup() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Files.writeString(source.resolve("file"), "content");
@@ -63,6 +79,7 @@ class LocalBackupServiceTest {
         assertEquals(full.snapshot().groupId(), incremental.snapshot().groupId());
     }
 
+    /** 用例 failedBackupDoesNotPrunePreviousSuccess：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
     @Test void failedBackupDoesNotPrunePreviousSuccess() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source")); Files.writeString(source.resolve("file"), "ok");
         BackupService service = new BackupService(); BackupOptions options = options(source, "chain", false, 1, BackupFilter.all());
@@ -72,6 +89,7 @@ class LocalBackupServiceTest {
         assertTrue(Files.exists(first.archivePath())); assertTrue(Files.exists(first.manifestPath()));
     }
 
+    /** 用例 metadataOnlyChangesAreIncludedInIncremental：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
     @Test void metadataOnlyChangesAreIncludedInIncremental() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source")); Path file = Files.writeString(source.resolve("file"), "same");
         assumePosix(file);
@@ -86,6 +104,7 @@ class LocalBackupServiceTest {
         assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(out.resolve("file"))));
     }
 
+    /** 用例 sourceAliasCannotPlaceDestinationInsideSource：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
     @Test void sourceAliasCannotPlaceDestinationInsideSource() throws Exception {
         assumeDirectorySymbolicLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));

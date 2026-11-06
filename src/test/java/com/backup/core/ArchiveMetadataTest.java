@@ -10,10 +10,28 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 import static com.backup.testing.FileSystemCapabilities.*;
 
+/**
+ * 元数据保真测试：修改/访问/权限回填、目录深到浅、未知属主警告、
+ * 增量基线核验（属性不写到不相符内容上）、软链接元数据安全恢复。
+ * POSIX 相关用例用 assumeTrue 守卫，Windows 上跳过并如实报告。
+ *
+ * 用例清单（10 项）：
+ * - accessTimeOnlyChangeIsRestoredWithoutRearchivingUnchangedContent
+ * - incrementalMetadataDoesNotModifyUnrelatedBaselineContent
+ * - scannerRecordsAccessTimeBeforeReadingFileForHash
+ * - restorePreservesFileAccessModifiedTimesAndPermissions
+ * - directoryMetadataIsAppliedAfterChildrenFromDeepestToShallowest
+ * - unknownOwnerProducesPathSpecificWarningWhileRestoringData
+ * - absoluteAndBrokenSymlinksPreserveTargetsWithoutChangingExternalContentOrMetadata
+ * - incrementalRestoreSplitsFormerHardlinksWithoutChangingUnmodifiedSibling
+ * - symlinkMetadataOnlyChangeIsIncludedInIncrementAndRestored
+ * - hardlinkPermissionOnlyChangeIsIncludedInIncrementAndKeepsIdentity
+ */
 class ArchiveMetadataTest {
     @TempDir Path temp;
     private static final long OLD = 1_600_000_000_000L;
 
+    /** 用例 accessTimeOnlyChangeIsRestoredWithoutRearchivingUnchangedContent：元数据保真与软链接属性恢复 的具体场景，断言即预期行为。 */
     @Test void accessTimeOnlyChangeIsRestoredWithoutRearchivingUnchangedContent() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path file = Files.writeString(source.resolve("file"), "unchanged");
@@ -28,8 +46,10 @@ class ArchiveMetadataTest {
         service.restore(full.archivePath(), out, null);
         service.restore(incremental.archivePath(), out, null);
         assertEquals(OLD - 200_000, attrs(out.resolve("file")).lastAccessTime().toMillis());
+        // 断言：访问时间经由增量清单回填——不需要重新归档未变内容。
     }
 
+    /** 用例 incrementalMetadataDoesNotModifyUnrelatedBaselineContent：元数据保真与软链接属性恢复 的具体场景，断言即预期行为。 */
     @Test void incrementalMetadataDoesNotModifyUnrelatedBaselineContent() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path file = Files.writeString(source.resolve("file"), "snapshot");
@@ -48,17 +68,21 @@ class ArchiveMetadataTest {
         assertEquals("different", Files.readString(unrelated));
     }
 
+    /** 便捷参数：ZIP、目标为 backups 目录、按需开关增量。 */
     private BackupOptions options(Path source, boolean incremental) {
         return new BackupOptions(source, temp.resolve("backups"), "metadata", CompressionType.ZIP, incremental, false, null);
     }
+    /** 设置修改/访问时间的辅助（创建时间由平台决定，单独断言）。 */
     private void times(Path path, long modified, long access) throws Exception {
         Files.getFileAttributeView(path, BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS)
                 .setTimes(FileTime.fromMillis(modified), FileTime.fromMillis(access), null);
     }
+    /** NOFOLLOW 读属性：断言链接自身而非目标。 */
     private BasicFileAttributes attrs(Path path) throws Exception {
         return Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
     }
 
+    /** 用例 scannerRecordsAccessTimeBeforeReadingFileForHash：元数据保真与软链接属性恢复 的具体场景，断言即预期行为。 */
     @Test void scannerRecordsAccessTimeBeforeReadingFileForHash() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path file = Files.writeString(source.resolve("file"), "hash this content");
@@ -70,6 +94,7 @@ class ArchiveMetadataTest {
         assertEquals(HashUtils.sha256(file), entry.sha256());
     }
 
+    /** 用例 restorePreservesFileAccessModifiedTimesAndPermissions：元数据保真与软链接属性恢复 的具体场景，断言即预期行为。 */
     @Test void restorePreservesFileAccessModifiedTimesAndPermissions() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path file = Files.writeString(source.resolve("file"), "metadata"); assumePosix(file);
@@ -85,6 +110,7 @@ class ArchiveMetadataTest {
         assertEquals("metadata", Files.readString(out.resolve("file")));
     }
 
+    /** 用例 directoryMetadataIsAppliedAfterChildrenFromDeepestToShallowest：元数据保真与软链接属性恢复 的具体场景，断言即预期行为。 */
     @Test void directoryMetadataIsAppliedAfterChildrenFromDeepestToShallowest() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path parent = Files.createDirectory(source.resolve("parent"));
@@ -103,6 +129,7 @@ class ArchiveMetadataTest {
         assertEquals("child", Files.readString(out.resolve("parent/child/file")));
     }
 
+    /** 用例 unknownOwnerProducesPathSpecificWarningWhileRestoringData：元数据保真与软链接属性恢复 的具体场景，断言即预期行为。 */
     @Test void unknownOwnerProducesPathSpecificWarningWhileRestoringData() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path file = Files.writeString(source.resolve("file"), "owned");
@@ -116,6 +143,7 @@ class ArchiveMetadataTest {
         assertTrue(result.warnings().stream().anyMatch(w -> w.contains("file") && w.contains("owner")), result.warnings().toString());
     }
 
+    /** 用例 absoluteAndBrokenSymlinksPreserveTargetsWithoutChangingExternalContentOrMetadata：元数据保真与软链接属性恢复 的具体场景，断言即预期行为。 */
     @Test void absoluteAndBrokenSymlinksPreserveTargetsWithoutChangingExternalContentOrMetadata() throws Exception {
         assumeSymbolicLinks(temp);
         Path outside = Files.writeString(temp.resolve("outside"), "external sentinel"); assumePosix(outside);
@@ -141,6 +169,7 @@ class ArchiveMetadataTest {
         assertEquals("external sentinel", Files.readString(outside));
     }
 
+    /** 用例 incrementalRestoreSplitsFormerHardlinksWithoutChangingUnmodifiedSibling：元数据保真与软链接属性恢复 的具体场景，断言即预期行为。 */
     @Test void incrementalRestoreSplitsFormerHardlinksWithoutChangingUnmodifiedSibling() throws Exception {
         assumeHardLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
@@ -161,6 +190,7 @@ class ArchiveMetadataTest {
         assertEquals("replacement", Files.readString(out.resolve("b")));
     }
 
+    /** 用例 symlinkMetadataOnlyChangeIsIncludedInIncrementAndRestored：元数据保真与软链接属性恢复 的具体场景，断言即预期行为。 */
     @Test void symlinkMetadataOnlyChangeIsIncludedInIncrementAndRestored() throws Exception {
         assumeSymbolicLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
@@ -177,6 +207,7 @@ class ArchiveMetadataTest {
         assertEquals(OLD + 100_000, attrs(out.resolve("link")).lastModifiedTime().toMillis());
     }
 
+    /** 用例 hardlinkPermissionOnlyChangeIsIncludedInIncrementAndKeepsIdentity：元数据保真与软链接属性恢复 的具体场景，断言即预期行为。 */
     @Test void hardlinkPermissionOnlyChangeIsIncludedInIncrementAndKeepsIdentity() throws Exception {
         assumeHardLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));

@@ -8,6 +8,21 @@ import java.time.Instant;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * 所有权目录测试：发布成对校验、组轮换（10 次上限 + keepGroups）、
+ * 损坏索引保守放弃、任务隔离、删除中断保留剩余链。
+ *
+ * 用例清单（9 项）：
+ * - prunesWholeGroupsAndSeparatesTasks
+ * - zeroDisablesPruningAndLatestSnapshotGroupIsPreserved
+ * - incompleteGroupAndMissingPairsRemainUntouched
+ * - rejectsTraversalAndMissingOrMismatchedManifest
+ * - corruptAndTraversalIndexesPreventUnsafeDeletion
+ * - symlinkIndexOrArchiveIsPreserved
+ * - publicationIsExplicitAndRejectsUnsafeSnapshotMetadata
+ * - deterministicRootOrderingAndMissingRootProtection
+ * - symlinkManifestIsNeitherPublishedNorDeleted
+ */
 class BackupCatalogTest {
     @TempDir Path dir;
     BackupCatalog.Snapshot snapshot(String task,String id,String group,String parent,int seq,long time) {
@@ -23,6 +38,7 @@ class BackupCatalogTest {
     }
     void add(BackupCatalog.Snapshot s) throws Exception {pair(s);BackupCatalog.publish(dir,s);}
     boolean exists(String id){return Files.exists(dir.resolve(id+".arbitrary"));}
+    /** 用例 prunesWholeGroupsAndSeparatesTasks：快照所有权目录与组保留淘汰 的具体场景，断言即预期行为。 */
     @Test void prunesWholeGroupsAndSeparatesTasks() throws Exception {
         add(snapshot("a","old","old","",1,1)); add(snapshot("a","child","old","old",2,2));
         add(snapshot("a","new","new","",1,3)); add(snapshot("b","foreign","foreign","",1,0));
@@ -32,12 +48,14 @@ class BackupCatalogTest {
         assertTrue(Files.exists(dir.resolve("unrelated.zip")));
         assertFalse(Files.exists(dir.resolve("old.arbitrary.snapshot.properties")));
     }
+    /** 用例 zeroDisablesPruningAndLatestSnapshotGroupIsPreserved：快照所有权目录与组保留淘汰 的具体场景，断言即预期行为。 */
     @Test void zeroDisablesPruningAndLatestSnapshotGroupIsPreserved() throws Exception {
         add(snapshot("a","old","old","",1,1));add(snapshot("a","latest","old","old",2,9));
         add(snapshot("a","new","new","",1,3));
         BackupCatalog.prune(dir,"a",0,s->{});assertTrue(exists("old"));
         BackupCatalog.prune(dir,"a",1,s->{});assertTrue(exists("old"));assertTrue(exists("latest"));
     }
+    /** 用例 incompleteGroupAndMissingPairsRemainUntouched：快照所有权目录与组保留淘汰 的具体场景，断言即预期行为。 */
     @Test void incompleteGroupAndMissingPairsRemainUntouched() throws Exception {
         add(snapshot("a","old","old","",1,1));add(snapshot("a","gap","old","missing",3,2));
         add(snapshot("a","new","new","",1,3));
@@ -46,6 +64,7 @@ class BackupCatalogTest {
         Files.delete(dir.resolve("gap.arbitrary.manifest.properties"));
         BackupCatalog.prune(dir,"a",1,warnings::add);assertTrue(exists("old"));
     }
+    /** 用例 rejectsTraversalAndMissingOrMismatchedManifest：快照所有权目录与组保留淘汰 的具体场景，断言即预期行为。 */
     @Test void rejectsTraversalAndMissingOrMismatchedManifest() throws Exception {
         var s=snapshot("a","root","root","",1,1);
         assertThrows(IOException.class,()->BackupCatalog.publish(dir,s));
@@ -54,12 +73,14 @@ class BackupCatalogTest {
         assertThrows(IllegalArgumentException.class,()->BackupCatalog.publish(dir,new BackupCatalog.Snapshot("a","root","root","",1,"../escape",Instant.now())));
         assertThrows(IllegalArgumentException.class,()->BackupCatalog.publish(dir,snapshot("../a","x","x","",1,1)));
     }
+    /** 用例 corruptAndTraversalIndexesPreventUnsafeDeletion：快照所有权目录与组保留淘汰 的具体场景，断言即预期行为。 */
     @Test void corruptAndTraversalIndexesPreventUnsafeDeletion() throws Exception {
         add(snapshot("a","old","old","",1,1));add(snapshot("a","new","new","",1,3));
         Files.writeString(dir.resolve("evil.snapshot.properties"),"version=1\narchiveName=../outside\n");
         List<String> warnings=new ArrayList<>();BackupCatalog.prune(dir,"a",1,warnings::add);
         assertTrue(exists("old"));assertFalse(warnings.isEmpty());
     }
+    /** 用例 symlinkIndexOrArchiveIsPreserved：快照所有权目录与组保留淘汰 的具体场景，断言即预期行为。 */
     @Test void symlinkIndexOrArchiveIsPreserved() throws Exception {
         add(snapshot("a","old","old","",1,1));add(snapshot("a","new","new","",1,3));
         Path external=Files.createTempFile("catalog-test", ".properties");
@@ -72,6 +93,7 @@ class BackupCatalogTest {
             BackupCatalog.prune(dir,"a",1,warnings::add);assertTrue(Files.isSymbolicLink(dir.resolve("old.arbitrary")));
         } finally {Files.deleteIfExists(external);}
     }
+    /** 用例 publicationIsExplicitAndRejectsUnsafeSnapshotMetadata：快照所有权目录与组保留淘汰 的具体场景，断言即预期行为。 */
     @Test void publicationIsExplicitAndRejectsUnsafeSnapshotMetadata() throws Exception {
         for (int i=0;i<4;i++) add(snapshot("a","g"+i,"g"+i,"",1,i));
         assertTrue(exists("g0"));assertTrue(exists("g3"));
@@ -79,12 +101,14 @@ class BackupCatalogTest {
         assertThrows(IllegalArgumentException.class,()->BackupCatalog.publish(dir,snapshot("a","x","x","",11,1)));
         assertThrows(IllegalArgumentException.class,()->BackupCatalog.publish(dir,snapshot("a","x","different","",1,1)));
     }
+    /** 用例 deterministicRootOrderingAndMissingRootProtection：快照所有权目录与组保留淘汰 的具体场景，断言即预期行为。 */
     @Test void deterministicRootOrderingAndMissingRootProtection() throws Exception {
         add(snapshot("a","alpha","alpha","",1,5));add(snapshot("a","zeta","zeta","",1,5));
         add(snapshot("a","orphan","absent","absent",2,1));
         List<String> warnings=new ArrayList<>();BackupCatalog.prune(dir,"a",1,warnings::add);
         assertFalse(exists("alpha"));assertTrue(exists("zeta"));assertTrue(exists("orphan"));assertFalse(warnings.isEmpty());
     }
+    /** 用例 symlinkManifestIsNeitherPublishedNorDeleted：快照所有权目录与组保留淘汰 的具体场景，断言即预期行为。 */
     @Test void symlinkManifestIsNeitherPublishedNorDeleted() throws Exception {
         var s=snapshot("a","old","old","",1,1);add(s);add(snapshot("a","new","new","",1,3));
         Path manifest=dir.resolve(s.archiveName()+".manifest.properties");

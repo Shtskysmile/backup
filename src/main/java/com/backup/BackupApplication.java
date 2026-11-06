@@ -7,10 +7,16 @@ import javax.swing.UIManager;
 import java.awt.Color;
 import java.awt.Font;
 
+/**
+ * 程序入口：EDT 上初始化 Nimbus 主题与品牌配色（失败退回系统外观），然后显示主窗口。
+ * 所有 Swing 组件只在事件分发线程创建与访问。
+ */
 public final class BackupApplication {
+    /** 工具类：不可实例化。 */
     private BackupApplication() {
     }
 
+    /** 入口：Nimbus 主题 + 品牌配色（失败退回系统外观），EDT 上显示主窗口。 */
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
             try {

@@ -7,7 +7,22 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * 任务闸门状态机测试：手动拒绝、自动合并（同 key 覆盖）、完成接力、
+ * 取消待执行、双 complete 防护与 dispatch 失败回滚。使用内联 executor 精确控制时序。
+ *
+ * 用例清单（8 项）：
+ * - manualTasksAreExclusiveUntilCompletion
+ * - latestAutomaticEventRunsOnceAfterActiveTaskCompletes
+ * - automaticEventDuringFollowupIsRetainedWithoutRetryingCompletedTasks
+ * - starterFailureReleasesGateAndDispatchesPendingEvent
+ * - synchronousDispatcherFailureDoesNotUnlockActiveFollowup
+ * - distinctAutomationSnapshotsSurviveWhileSameKeyCoalescesInOrder
+ * - cancelRemovesOnlyStoppedAutomationPendingWork
+ * - closeDiscardsPendingAndRejectsFurtherWork
+ */
 class BackupTaskGateTest {
+    /** 用例 manualTasksAreExclusiveUntilCompletion：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
     @Test void manualTasksAreExclusiveUntilCompletion() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -26,6 +41,7 @@ class BackupTaskGateTest {
         assertEquals(List.of("backup", "restore"), events);
     }
 
+    /** 用例 latestAutomaticEventRunsOnceAfterActiveTaskCompletes：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
     @Test void latestAutomaticEventRunsOnceAfterActiveTaskCompletes() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -45,6 +61,7 @@ class BackupTaskGateTest {
         assertTrue(queue.isEmpty());
     }
 
+    /** 用例 automaticEventDuringFollowupIsRetainedWithoutRetryingCompletedTasks：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
     @Test void automaticEventDuringFollowupIsRetainedWithoutRetryingCompletedTasks() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -63,6 +80,7 @@ class BackupTaskGateTest {
         assertTrue(queue.isEmpty());
     }
 
+    /** 用例 starterFailureReleasesGateAndDispatchesPendingEvent：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
     @Test void starterFailureReleasesGateAndDispatchesPendingEvent() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -76,6 +94,7 @@ class BackupTaskGateTest {
         assertFalse(gate.isBusy());
     }
 
+    /** 用例 synchronousDispatcherFailureDoesNotUnlockActiveFollowup：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
     @Test void synchronousDispatcherFailureDoesNotUnlockActiveFollowup() {
         var gate = new BackupTaskGate(Runnable::run);
         var events = new ArrayList<String>();
@@ -90,6 +109,7 @@ class BackupTaskGateTest {
         assertFalse(gate.isBusy());
     }
 
+    /** 用例 distinctAutomationSnapshotsSurviveWhileSameKeyCoalescesInOrder：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
     @Test void distinctAutomationSnapshotsSurviveWhileSameKeyCoalescesInOrder() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -109,6 +129,7 @@ class BackupTaskGateTest {
         assertTrue(queue.isEmpty());
     }
 
+    /** 用例 cancelRemovesOnlyStoppedAutomationPendingWork：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
     @Test void cancelRemovesOnlyStoppedAutomationPendingWork() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -126,6 +147,7 @@ class BackupTaskGateTest {
         assertTrue(queue.isEmpty());
     }
 
+    /** 用例 closeDiscardsPendingAndRejectsFurtherWork：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
     @Test void closeDiscardsPendingAndRejectsFurtherWork() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);

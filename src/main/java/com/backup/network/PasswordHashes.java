@@ -9,8 +9,16 @@ import java.security.spec.KeySpec;
 import java.util.Arrays;
 import java.util.HexFormat;
 
+/**
+ * 口令哈希工具：PBKDF2-HmacSHA256（210000 次迭代 / 256 位 / 16 字节随机盐）。
+ *
+ * <p>verify 用 MessageDigest.isEqual 做常数时间比较，杜绝时序侧信道；
+ * hash/verify 的输入口令在 KeySpec 中用后立即 clearPassword。
+ * 慢哈希的工程意义：把"每秒数十亿次猜测"压到"每秒几千次"，盐值防彩虹表。</p>
+ */
 /** Salted PBKDF2 password hashing shared by the network user store. */
 public final class PasswordHashes {
+    /** 迭代次数与 EncryptionService 保持同一量级（OWASP 推荐区间）。 */
     public static final int ITERATIONS = 210_000;
     public static final int SALT_BYTES = 16;
     public static final int KEY_BITS = 256;
@@ -30,6 +38,7 @@ public final class PasswordHashes {
         if (stored == null) return false;
         byte[] salt = HexFormat.of().parseHex(stored.saltHex());
         byte[] expected = HexFormat.of().parseHex(stored.verifierHex());
+        // MessageDigest.isEqual：长度不同立即返回、长度相同常数时间——防时序逐位猜解。
         byte[] actual = bytes(password, salt, stored.iterations());
         try {
             return MessageDigest.isEqual(expected, actual);

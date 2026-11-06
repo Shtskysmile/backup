@@ -12,6 +12,28 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+/**
+ * 特殊文件测试：FIFO 往返（不阻塞/权限增量/损坏清单拒绝/假 mkfifo 与超时防护）、
+ * 字符/块设备号白名单与尽力重建、套接字只记录。mkfifo/mknod 用例在 POSIX 实跑，
+ * 其它平台按能力跳过。
+ *
+ * 用例清单（15 项）：
+ * - zipFifoRoundTripAndPermissionIncrementFinishWithoutBlocking
+ * - gzipFifoRoundTripAndPermissionIncrementFinishWithoutBlocking
+ * - encryptedFifoRoundTripFinishesWithoutBlocking
+ * - unavailableMkfifoPreservesExistingFileAndReportsWarning
+ * - nonzeroMkfifoExitIsNotSilentlyAcceptedForExistingTarget
+ * - fifoMatchesZeroByteFilterWithoutReadingItsStream
+ * - malformedFifoPayloadIsRejectedBeforeChangingDestination
+ * - wrongIncrementalFifoBaselineIsWarnedWithoutChangingRegularFile
+ * - zeroExitWithoutCreatingPipeIsReportedAndOriginalTargetPreserved
+ * - missingTimeToolReportsAttributeWarningsWithoutBlocking
+ * - replacingNonemptyDirectoryFailsWithoutRemovingItsContents
+ * - unchangedIncrementRestoresFifoPermissionsAfterDestinationDrift
+ * - deviceEntriesRestoreWithWarningWhenRecreationIsImpossible
+ * - invalidDeviceNumbersAreRejectedBeforeAnyWrite
+ * - socketEntryIsRecordedButNeverRecreated
+ */
 class SpecialFileTypeTest {
     @TempDir Path temp;
 
@@ -28,10 +50,14 @@ class SpecialFileTypeTest {
         finally { Files.deleteIfExists(probe); }
     }
 
+    /** 用例 zipFifoRoundTripAndPermissionIncrementFinishWithoutBlocking：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void zipFifoRoundTripAndPermissionIncrementFinishWithoutBlocking() throws Exception { roundTrip("ZIP", false); }
+    /** 用例 gzipFifoRoundTripAndPermissionIncrementFinishWithoutBlocking：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void gzipFifoRoundTripAndPermissionIncrementFinishWithoutBlocking() throws Exception { roundTrip("GZIP", false); }
+    /** 用例 encryptedFifoRoundTripFinishesWithoutBlocking：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void encryptedFifoRoundTripFinishesWithoutBlocking() throws Exception { roundTrip("GZIP", true); }
 
+    /** 核心往返：目录+文件+FIFO → 备份（可选加密）→ 还原 → 验证类型/权限/内容/增量。 */
     private void roundTrip(String format, boolean encrypted) throws Exception {
         assumeUnix();
         Path log = temp.resolve("child.log");
@@ -59,6 +85,7 @@ class SpecialFileTypeTest {
         return archive;
     }
 
+    /** 用例 unavailableMkfifoPreservesExistingFileAndReportsWarning：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void unavailableMkfifoPreservesExistingFileAndReportsWarning() throws Exception {
         Path archive = archive(); Path out = Files.createDirectory(temp.resolve("out"));
         Path existing = Files.writeString(out.resolve("pipe"), "keep");
@@ -70,6 +97,7 @@ class SpecialFileTypeTest {
         assertTrue(result.warnings().stream().anyMatch(w -> w.contains("pipe") && w.contains("not recreated")));
     }
 
+    /** 用例 nonzeroMkfifoExitIsNotSilentlyAcceptedForExistingTarget：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void nonzeroMkfifoExitIsNotSilentlyAcceptedForExistingTarget() throws Exception {
         assumeUnix();
         Path fake = Files.writeString(temp.resolve("failed-mkfifo"), "#!/bin/sh\necho 'simulated mkfifo failure' >&2\nexit 17\n");
@@ -81,6 +109,7 @@ class SpecialFileTypeTest {
         assertTrue(result.warnings().stream().anyMatch(w -> w.contains("17") && w.contains("not recreated")), result.warnings().toString());
     }
 
+    /** 用例 fifoMatchesZeroByteFilterWithoutReadingItsStream：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void fifoMatchesZeroByteFilterWithoutReadingItsStream() throws Exception {
         assumeUnix();
         Path source = Files.createDirectory(temp.resolve("source"));
@@ -94,6 +123,7 @@ class SpecialFileTypeTest {
         assertEquals(0, entries.getFirst().size());
     }
 
+    /** 用例 malformedFifoPayloadIsRejectedBeforeChangingDestination：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void malformedFifoPayloadIsRejectedBeforeChangingDestination() throws Exception {
         BackupEntry entry = new BackupEntry("pipe", false, 1, 0, "", "", "", "", EntryType.FIFO, "", null, null);
         BackupManifest manifest = new BackupManifest("source", Instant.now(), CompressionType.ZIP, false, false, List.of(entry));
@@ -104,6 +134,7 @@ class SpecialFileTypeTest {
         assertEquals("keep", Files.readString(out.resolve("pipe")));
     }
 
+    /** 用例 wrongIncrementalFifoBaselineIsWarnedWithoutChangingRegularFile：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void wrongIncrementalFifoBaselineIsWarnedWithoutChangingRegularFile() throws Exception {
         BackupManifest delta = new BackupManifest("source", Instant.now(), CompressionType.ZIP, true, false, manifest().entries());
         Path archive = temp.resolve("delta.zip");
@@ -116,6 +147,7 @@ class SpecialFileTypeTest {
         assertEquals(modified, Files.getLastModifiedTime(old).toMillis());
     }
 
+    /** 用例 zeroExitWithoutCreatingPipeIsReportedAndOriginalTargetPreserved：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void zeroExitWithoutCreatingPipeIsReportedAndOriginalTargetPreserved() throws Exception {
         assumeUnix();
         Path fake = Files.writeString(temp.resolve("fake-mkfifo"), "#!/bin/sh\nprintf wrong > \"$3\"\nexit 0\n");
@@ -126,6 +158,7 @@ class SpecialFileTypeTest {
         assertTrue(result.warnings().stream().anyMatch(w -> w.contains("did not create a FIFO")));
     }
 
+    /** 用例 missingTimeToolReportsAttributeWarningsWithoutBlocking：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void missingTimeToolReportsAttributeWarningsWithoutBlocking() throws Exception {
         assumeUnix();
         Path archive = archive();
@@ -135,6 +168,7 @@ class SpecialFileTypeTest {
         assertTrue(result.warnings().stream().anyMatch(w -> w.contains("could not restore FIFO modified time")));
     }
 
+    /** 用例 replacingNonemptyDirectoryFailsWithoutRemovingItsContents：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void replacingNonemptyDirectoryFailsWithoutRemovingItsContents() throws Exception {
         assumeUnix();
         Path archive = archive(); Path out = Files.createDirectories(temp.resolve("out/pipe"));
@@ -144,6 +178,7 @@ class SpecialFileTypeTest {
         assertTrue(result.warnings().stream().anyMatch(w -> w.contains("not recreated")));
     }
 
+    /** 用例 unchangedIncrementRestoresFifoPermissionsAfterDestinationDrift：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void unchangedIncrementRestoresFifoPermissionsAfterDestinationDrift() throws Exception {
         assumeUnix();
         Path source = Files.createDirectory(temp.resolve("source"));
@@ -160,6 +195,7 @@ class SpecialFileTypeTest {
         assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(out.resolve("pipe"), LinkOption.NOFOLLOW_LINKS)));
     }
 
+    /** 用例 deviceEntriesRestoreWithWarningWhenRecreationIsImpossible：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void deviceEntriesRestoreWithWarningWhenRecreationIsImpossible() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path file = Files.writeString(source.resolve("file"), "content");
@@ -173,10 +209,13 @@ class SpecialFileTypeTest {
         Path out = temp.resolve("device-out");
         RestoreResult result = new ArchiveService().restoreDetailed(archive, out);
         assertEquals("content", Files.readString(out.resolve("file")), "Regular entries restore normally");
+        // 关键：特殊文件失败只影响它自己，常规文件照常还原。
         assertTrue(result.warnings().stream().anyMatch(w -> w.contains("ttyp3") && w.contains("CHARACTER_DEVICE")),
+        // 设备重建需要 root/mknod：无特权平台降级为警告，但常规条目必须照常还原。
                 "Expected a recreation warning: " + result.warnings());
     }
 
+    /** 用例 invalidDeviceNumbersAreRejectedBeforeAnyWrite：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void invalidDeviceNumbersAreRejectedBeforeAnyWrite() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Files.writeString(source.resolve("file"), "content");
@@ -192,6 +231,7 @@ class SpecialFileTypeTest {
         }
     }
 
+    /** 用例 socketEntryIsRecordedButNeverRecreated：特殊文件（FIFO/设备/套接字） 的具体场景，断言即预期行为。 */
     @Test void socketEntryIsRecordedButNeverRecreated() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path file = Files.writeString(source.resolve("file"), "content");
