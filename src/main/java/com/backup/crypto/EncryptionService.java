@@ -88,6 +88,13 @@ public final class EncryptionService {
             try (CipherInputStream cipherIn = new CipherInputStream(headerIn, cipher);
                  OutputStream outputStream = Files.newOutputStream(output)) {
                 cipherIn.transferTo(outputStream);
+            } catch (IOException streamFailure) {
+                // CipherInputStream reports authentication failures as plain IOExceptions.
+                if (streamFailure.getCause() instanceof GeneralSecurityException
+                        || streamFailure.getMessage() != null && streamFailure.getMessage().contains("Tag mismatch")) {
+                    throw new IOException("Unable to decrypt backup. Check the passphrase.", streamFailure);
+                }
+                throw streamFailure;
             }
         } catch (GeneralSecurityException e) {
             throw new IOException("Unable to decrypt backup. Check the passphrase.", e);

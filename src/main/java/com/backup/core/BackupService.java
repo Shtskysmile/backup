@@ -98,7 +98,8 @@ public final class BackupService {
         } finally { if (temporary != null) Files.deleteIfExists(temporary); }
     }
 
-    private String taskIdentity(Path source, BackupOptions options) {
+    /** Stable task identity shared by local and network backup flows. */
+    public static String taskIdentity(Path source, BackupOptions options) {
         try {
             String name = options.backupName(), filter = options.filter().identity(), path = source.toString();
             String identity = path.length() + ":" + path + name.length() + ":" + name + filter.length() + ":" + filter;

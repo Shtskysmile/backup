@@ -10,6 +10,8 @@ import com.backup.core.BackupOptions;
 import com.backup.core.BackupResult;
 import com.backup.core.BackupService;
 import com.backup.core.CompressionType;
+import com.backup.network.NetworkBackupClient;
+import com.backup.network.NetworkBackupService;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -53,6 +55,8 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.ResolverStyle;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
+import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 
 public final class BackupFrame extends JFrame {
@@ -114,6 +118,34 @@ public final class BackupFrame extends JFrame {
     private final JTextArea logArea = new JTextArea(10, 80);
     private final JLabel statusLabel = new JLabel("Ready");
 
+    private final JTextField serverRootField = new JTextField(30);
+    private final JSpinner serverPortSpinner = new JSpinner(new SpinnerNumberModel(8443, 1, 65535, 1));
+    private final JButton serverToggleButton = new JButton("Start server");
+    private final JTextField newUsernameField = new JTextField(16);
+    private final JPasswordField newUserPasswordField = new JPasswordField(16);
+
+    private final JTextField networkHostField = new JTextField("localhost", 14);
+    private final JSpinner networkPortSpinner = new JSpinner(new SpinnerNumberModel(8443, 1, 65535, 1));
+    private final JTextField networkUserField = new JTextField(14);
+    private final JPasswordField networkPasswordField = new JPasswordField(16);
+    private final JTextField networkSourceField = new JTextField(30);
+    private final JTextField networkNameField = new JTextField("Backup", 16);
+    private final JComboBox<CompressionType> networkCompressionCombo = new JComboBox<>(CompressionType.values());
+    private final JCheckBox networkIncrementalCheckBox = new JCheckBox("Incremental", true);
+    private final JCheckBox networkEncryptedCheckBox = new JCheckBox("Encrypt archive");
+    private final JPasswordField networkPassphraseField = new JPasswordField(16);
+    private final JSpinner networkKeepGroupsSpinner = new JSpinner(new SpinnerNumberModel(0, 0, Integer.MAX_VALUE, 1));
+    private final JComboBox<String> snapshotsCombo = new JComboBox<>();
+    private final JTextField networkRestoreDestinationField = new JTextField(30);
+    private final JPasswordField networkRestorePassphraseField = new JPasswordField(16);
+    private final JButton networkBackupButton = new JButton("Back up to server");
+    private final JButton networkListButton = new JButton("List snapshots");
+    private final JButton networkRestoreButton = new JButton("Restore selected");
+    private final JButton networkDeleteButton = new JButton("Delete selected group");
+    private final JButton networkPingButton = new JButton("Test connection");
+    private final JButton addUserButton = new JButton("Add user");
+    private volatile com.backup.network.NetworkBackupServer networkServer;
+
     public BackupFrame() {
         super("Backup");
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
@@ -129,6 +161,7 @@ public final class BackupFrame extends JFrame {
         tabs.addTab("Backup", scrollablePage(createBackupPanel()));
         tabs.addTab("Restore", scrollablePage(createRestorePanel()));
         tabs.addTab("Automation", scrollablePage(createAutomationPanel()));
+        tabs.addTab("Network", scrollablePage(createNetworkPanel()));
         tabs.setFont(new Font("SansSerif", Font.BOLD, 13));
         tabs.setForeground(INK);
         tabs.setBackground(WINDOW_BACKGROUND);
@@ -235,7 +268,7 @@ public final class BackupFrame extends JFrame {
         addRow(filters, row++, "Modified at or before", modifiedBeforeField);
         addRow(filters, row++, "Minimum bytes", minBytesField);
         addRow(filters, row++, "Maximum bytes", maxBytesField);
-        addRow(filters, row, "Filter rules", new JLabel("<html>Leave blank for all files. Separate alternatives with ; — conditions intersect.<br>Paths use / and glob patterns, e.g. docs/**; names match the basename.<br>Extensions ignore case, e.g. txt;pdf. Excluded directories are not scanned.<br>Owners match exact names without case sensitivity, e.g. alice;root; unknown owners do not match.<br>Dates: yyyy-MM-dd HH:mm:ss, local time; dates and sizes include both boundaries.<br>Links are filtered by their own path, name, owner, modification time and recorded size; targets are not read.</html>"));
+        addRow(filters, row, "Filter rules", new JLabel("<html>Leave blank for all files. Separate alternatives with ; — conditions intersect.<br>Paths use / and glob patterns, e.g. docs/**; names match the basename.<br>Owners are exact user/group names (case ignored), e.g. alice;root.<br>Extensions ignore case, e.g. txt;pdf. Excluded directories are not scanned.<br>Dates: yyyy-MM-dd HH:mm:ss, local time; dates and sizes include both boundaries.<br>Links are filtered by their own path, name, modification time and recorded size; targets are not read.</html>"));
         filters.setVisible(false);
         toggle.addActionListener(event -> {
             filters.setVisible(!filters.isVisible());
@@ -320,6 +353,385 @@ public final class BackupFrame extends JFrame {
         addActionRow(form, row, watchButton);
         panel.add(form, BorderLayout.CENTER);
         return panel;
+    }
+
+    private JPanel createNetworkPanel() {
+        JPanel panel = pagePanel("NETWORK", "Cloud backup on your terms",
+                "Run a backup receiver for your accounts, or push encrypted snapshots to one.");
+
+        JPanel serverForm = formPanel("Server (receiver)");
+        int serverRow = 0;
+        addPathRow(serverForm, serverRow++, "Storage directory", serverRootField, true);
+        addRow(serverForm, serverRow++, "Port", serverPortSpinner);
+        serverToggleButton.addActionListener(event -> toggleNetworkServer());
+        styleSecondaryButton(serverToggleButton);
+        addActionRow(serverForm, serverRow++, serverToggleButton);
+        addRow(serverForm, serverRow++, "New username", newUsernameField);
+        addRow(serverForm, serverRow++, "New password", newUserPasswordField);
+        addUserButton.addActionListener(event -> addNetworkUser());
+        styleSmallButton(addUserButton);
+        addActionRow(serverForm, serverRow, addUserButton);
+
+        JPanel clientForm = formPanel("Client (cloud backup)");
+        int row = 0;
+        JPanel endpointRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        endpointRow.setOpaque(false);
+        endpointRow.add(new JLabel("Host"));
+        endpointRow.add(networkHostField);
+        endpointRow.add(new JLabel("Port"));
+        endpointRow.add(networkPortSpinner);
+        endpointRow.add(new JLabel("User"));
+        endpointRow.add(networkUserField);
+        endpointRow.add(new JLabel("Password"));
+        endpointRow.add(networkPasswordField);
+        networkPingButton.addActionListener(event -> testNetworkConnection());
+        styleSmallButton(networkPingButton);
+        endpointRow.add(networkPingButton);
+        addRow(clientForm, row++, "Server account", endpointRow);
+        addPathRow(clientForm, row++, "Source directory", networkSourceField, true);
+        JPanel settingsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        settingsRow.setOpaque(false);
+        settingsRow.add(new JLabel("Name"));
+        settingsRow.add(networkNameField);
+        settingsRow.add(new JLabel("Compression"));
+        settingsRow.add(networkCompressionCombo);
+        settingsRow.add(networkIncrementalCheckBox);
+        settingsRow.add(networkEncryptedCheckBox);
+        settingsRow.add(new JLabel("Passphrase"));
+        settingsRow.add(networkPassphraseField);
+        addRow(clientForm, row++, "Backup settings", settingsRow);
+        JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        actionRow.setOpaque(false);
+        actionRow.add(new JLabel("Keep groups"));
+        actionRow.add(networkKeepGroupsSpinner);
+        networkBackupButton.addActionListener(event -> runNetworkBackup());
+        stylePrimaryButton(networkBackupButton);
+        actionRow.add(networkBackupButton);
+        addRow(clientForm, row++, "Actions", actionRow);
+        networkListButton.addActionListener(event -> runNetworkList());
+        styleSmallButton(networkListButton);
+        snapshotsCombo.setPreferredSize(new Dimension(420, 30));
+        JPanel listRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        listRow.setOpaque(false);
+        listRow.add(networkListButton);
+        listRow.add(snapshotsCombo);
+        addRow(clientForm, row++, "Snapshots", listRow);
+        addPathRow(clientForm, row++, "Restore destination", networkRestoreDestinationField, true);
+        JPanel restoreRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        restoreRow.setOpaque(false);
+        restoreRow.add(new JLabel("Passphrase"));
+        restoreRow.add(networkRestorePassphraseField);
+        networkRestoreButton.addActionListener(event -> runNetworkRestore());
+        styleSmallButton(networkRestoreButton);
+        restoreRow.add(networkRestoreButton);
+        networkDeleteButton.addActionListener(event -> runNetworkDelete());
+        styleSmallButton(networkDeleteButton);
+        restoreRow.add(networkDeleteButton);
+        addRow(clientForm, row, "Restore / delete", restoreRow);
+
+        JPanel combined = new JPanel();
+        combined.setOpaque(false);
+        combined.setLayout(new BoxLayout(combined, BoxLayout.Y_AXIS));
+        combined.add(serverForm);
+        combined.add(Box.createVerticalStrut(12));
+        combined.add(clientForm);
+        panel.add(combined, BorderLayout.NORTH);
+        return panel;
+    }
+
+    private void toggleNetworkServer() {
+        if (networkServer != null) {
+            networkServer.close();
+            networkServer = null;
+            serverToggleButton.setText("Start server");
+            styleSecondaryButton(serverToggleButton);
+            log("Network server stopped.");
+            return;
+        }
+        Path root = Path.of(serverRootField.getText().trim());
+        int port = ((Number) serverPortSpinner.getValue()).intValue();
+        if (serverRootField.getText().isBlank()) {
+            showError("Invalid server settings", "A storage directory is required.");
+            return;
+        }
+        serverToggleButton.setEnabled(false);
+        new SwingWorker<com.backup.network.NetworkBackupServer, String>() {
+            @Override protected com.backup.network.NetworkBackupServer doInBackground() throws Exception {
+                return com.backup.network.NetworkBackupServer.start(port, root);
+            }
+
+            @Override protected void done() {
+                serverToggleButton.setEnabled(true);
+                try {
+                    networkServer = get();
+                    serverToggleButton.setText("Stop server");
+                    styleWarningButton(serverToggleButton);
+                    log("Network server listening on port " + networkServer.port() + " (TLS).");
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (ExecutionException e) {
+                    log("Network server failed to start: " + rootMessage(e));
+                    showError("Network server failed", rootMessage(e));
+                }
+            }
+        }.execute();
+    }
+
+    private void addNetworkUser() {
+        if (networkServer == null) {
+            showError("Server not running", "Start the server before adding accounts.");
+            return;
+        }
+        try {
+            char[] password = newUserPasswordField.getPassword();
+            com.backup.network.NetworkUsers.ensureUser(networkServer.storageRoot(), newUsernameField.getText().trim(), password);
+            Arrays.fill(password, '\0');
+            newUserPasswordField.setText("");
+            log("User added: " + newUsernameField.getText().trim());
+        } catch (IOException | RuntimeException e) {
+            showError("Could not add user", e.getMessage());
+        }
+    }
+
+    private NetworkBackupClient connectedClient() throws IOException {
+        int port = ((Number) networkPortSpinner.getValue()).intValue();
+        return new NetworkBackupClient(networkHostField.getText().trim(), port, networkUserField.getText().trim(),
+                networkPasswordField.getPassword(), networkServer == null ? null
+                        : networkServer.storageRoot().resolve(com.backup.network.NetworkBackupServer.KEYSTORE_FILE),
+                com.backup.network.NetworkBackupServer.KEYSTORE_PASSWORD);
+    }
+
+    private void testNetworkConnection() {
+        if (networkUserField.getText().isBlank()) {
+            showError("Invalid connection", "A username is required.");
+            return;
+        }
+        new SwingWorker<Properties, Void>() {
+            @Override protected Properties doInBackground() throws Exception {
+                try (NetworkBackupClient client = connectedClient()) {
+                    return client.ping();
+                }
+            }
+
+            @Override protected void done() {
+                try {
+                    get();
+                    log("Connection OK: server answered as user '" + networkUserField.getText().trim() + "'.");
+                    updateStatus("Connected", SUCCESS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (ExecutionException e) {
+                    log("Connection failed: " + rootMessage(e));
+                    updateStatus("Connection failed", DANGER);
+                    showError("Connection failed", rootMessage(e));
+                }
+            }
+        }.execute();
+    }
+
+    private void runNetworkBackup() {
+        try {
+            BackupOptions options = buildNetworkBackupOptions();
+            int keepGroups = ((Number) networkKeepGroupsSpinner.getValue()).intValue();
+            if (!taskGate.submitManual(() -> startNetworkBackupWorker(options, keepGroups))) {
+                log("Network backup unavailable while another backup or restore is running.");
+                JOptionPane.showMessageDialog(this, "A backup or restore is running. Please wait for completion.");
+            }
+        } catch (RuntimeException e) {
+            showError("Invalid network backup settings", e.getMessage());
+        }
+    }
+
+    private BackupOptions buildNetworkBackupOptions() {
+        return new BackupOptions(
+                Path.of(networkSourceField.getText().trim()),
+                Path.of(System.getProperty("java.io.tmpdir"), "backup-network-unused"),
+                networkNameField.getText(),
+                (CompressionType) networkCompressionCombo.getSelectedItem(),
+                networkIncrementalCheckBox.isSelected(),
+                networkEncryptedCheckBox.isSelected(),
+                networkPassphraseField.getPassword(),
+                BackupFilter.all(),
+                0);
+    }
+
+    private void startNetworkBackupWorker(BackupOptions options, int keepGroups) {
+        setTaskControlsEnabled(false);
+        updateStatus("Backing up to server", PRIMARY);
+        new SwingWorker<NetworkBackupService.NetworkBackupResult, String>() {
+            @Override protected NetworkBackupService.NetworkBackupResult doInBackground() throws Exception {
+                try (NetworkBackupClient client = connectedClient()) {
+                    publish("Network backup started (" + options.compressionType() + (options.encrypted() ? ", encrypted" : "") + ").");
+                    return new NetworkBackupService().backup(client, options, keepGroups);
+                }
+            }
+
+            @Override protected void process(java.util.List<String> chunks) {
+                chunks.forEach(BackupFrame.this::log);
+            }
+
+            @Override protected void done() {
+                try {
+                    NetworkBackupService.NetworkBackupResult result = get();
+                    log("Network backup complete: %s (%s, %d archived entries, %,d bytes, %d warnings).".formatted(
+                            result.archiveName(), result.full() ? "full" : "incremental",
+                            result.archivedEntries(), result.bytes(), result.warnings().size()));
+                    result.warnings().forEach(warning -> log("Warning: " + warning));
+                    updateStatus(result.warnings().isEmpty() ? "Ready" : result.warnings().size() + " warnings",
+                            result.warnings().isEmpty() ? SUCCESS : WARNING);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log("Network backup interrupted.");
+                    updateStatus("Interrupted", WARNING);
+                } catch (ExecutionException e) {
+                    log("Network backup failed: " + rootMessage(e));
+                    updateStatus("Network backup failed", DANGER);
+                    showError("Network backup failed", rootMessage(e));
+                } finally {
+                    setTaskControlsEnabled(true);
+                    taskGate.complete();
+                }
+            }
+        }.execute();
+    }
+
+    private void runNetworkList() {
+        new SwingWorker<java.util.List<NetworkBackupClient.RemoteSnapshot>, Void>() {
+            @Override protected java.util.List<NetworkBackupClient.RemoteSnapshot> doInBackground() throws Exception {
+                try (NetworkBackupClient client = connectedClient()) {
+                    return client.listSnapshots();
+                }
+            }
+
+            @Override protected void done() {
+                try {
+                    java.util.List<NetworkBackupClient.RemoteSnapshot> snapshots = get();
+                    snapshotsCombo.removeAllItems();
+                    for (NetworkBackupClient.RemoteSnapshot snapshot : snapshots) {
+                        snapshotsCombo.addItem("%s  (%s #%d, %,d bytes)".formatted(snapshot.archiveName(),
+                                snapshot.groupId().substring(0, 8), snapshot.sequence(), snapshot.bytes()));
+                    }
+                    log("Server lists " + snapshots.size() + " snapshot(s).");
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (ExecutionException e) {
+                    log("Listing snapshots failed: " + rootMessage(e));
+                    showError("Listing snapshots failed", rootMessage(e));
+                }
+            }
+        }.execute();
+    }
+
+    private NetworkBackupClient.RemoteSnapshot selectedSnapshot() {
+        int index = snapshotsCombo.getSelectedIndex();
+        if (index < 0) throw new IllegalStateException("List snapshots first, then select one.");
+        try {
+            java.util.List<NetworkBackupClient.RemoteSnapshot> snapshots;
+            // The combo mirrors the latest listing; re-query so actions use fresh server state.
+            try (NetworkBackupClient client = connectedClient()) {
+                snapshots = client.listSnapshots();
+            }
+            if (index >= snapshots.size()) throw new IllegalStateException("The selected snapshot is no longer available; refresh the list.");
+            return snapshots.get(index);
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            throw new IllegalStateException("Server query failed: " + e.getMessage(), e);
+        }
+    }
+
+    private void runNetworkRestore() {
+        try {
+            NetworkBackupClient.RemoteSnapshot snapshot = selectedSnapshot();
+            Path destination = Path.of(networkRestoreDestinationField.getText().trim());
+            if (networkRestoreDestinationField.getText().isBlank()) {
+                showError("Invalid restore settings", "A restore destination is required.");
+                return;
+            }
+            char[] passphrase = networkRestorePassphraseField.getPassword();
+            if (!taskGate.submitManual(() -> startNetworkRestoreWorker(snapshot.archiveName(), destination, passphrase))) {
+                log("Restore unavailable while another backup or restore is running.");
+                JOptionPane.showMessageDialog(this, "A backup or restore is running. Please wait for completion.");
+            }
+        } catch (RuntimeException e) {
+            showError("Restore unavailable", e.getMessage());
+        }
+    }
+
+    private void startNetworkRestoreWorker(String archiveName, Path destination, char[] passphrase) {
+        setTaskControlsEnabled(false);
+        updateStatus("Restoring from server", PRIMARY);
+        new SwingWorker<RestoreResult, String>() {
+            @Override protected RestoreResult doInBackground() throws Exception {
+                try (NetworkBackupClient client = connectedClient()) {
+                    publish("Downloading " + archiveName + " ...");
+                    return new NetworkBackupService().restore(client, archiveName, destination, passphrase);
+                }
+            }
+
+            @Override protected void process(java.util.List<String> chunks) {
+                chunks.forEach(BackupFrame.this::log);
+            }
+
+            @Override protected void done() {
+                try {
+                    RestoreResult result = get();
+                    log("Network restore complete: " + result.manifest().entries().size() + " manifest entries, "
+                            + result.warnings().size() + " warnings.");
+                    result.warnings().forEach(warning -> log("Warning: " + warning));
+                    updateStatus(result.warnings().isEmpty() ? "Ready" : result.warnings().size() + " warnings",
+                            result.warnings().isEmpty() ? SUCCESS : WARNING);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log("Network restore interrupted.");
+                    updateStatus("Interrupted", WARNING);
+                } catch (ExecutionException e) {
+                    log("Network restore failed: " + rootMessage(e));
+                    updateStatus("Network restore failed", DANGER);
+                    showError("Network restore failed", rootMessage(e));
+                } finally {
+                    java.util.Arrays.fill(passphrase, '\0');
+                    setTaskControlsEnabled(true);
+                    taskGate.complete();
+                }
+            }
+        }.execute();
+    }
+
+    private void runNetworkDelete() {
+        try {
+            NetworkBackupClient.RemoteSnapshot snapshot = selectedSnapshot();
+            int answer = JOptionPane.showConfirmDialog(this,
+                    "Delete the whole backup group of " + snapshot.archiveName() + " from the server?",
+                    "Delete group", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (answer != JOptionPane.OK_OPTION) return;
+            new SwingWorker<Properties, Void>() {
+                @Override protected Properties doInBackground() throws Exception {
+                    try (NetworkBackupClient client = connectedClient()) {
+                        return client.deleteGroup(snapshot.groupId());
+                    }
+                }
+
+                @Override protected void done() {
+                    try {
+                        Properties response = get();
+                        log("Server deleted " + response.getProperty("deleted", "0") + " archive(s).");
+                        for (int i = 0; ; i++) {
+                            String warning = response.getProperty("warning." + i);
+                            if (warning == null) break;
+                            log("Warning: " + warning);
+                        }
+                        runNetworkList();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } catch (ExecutionException e) {
+                        log("Delete failed: " + rootMessage(e));
+                        showError("Delete failed", rootMessage(e));
+                    }
+                }
+            }.execute();
+        } catch (RuntimeException e) {
+            showError("Delete unavailable", e.getMessage());
+        }
     }
 
     private JPanel createLogPanel() {
@@ -465,7 +877,8 @@ public final class BackupFrame extends JFrame {
                 encryptedCheckBox.isSelected(),
                 passphraseField.getPassword(),
                 new BackupFilter(includePathsField.getText(), excludePathsField.getText(),
-                        extensionsField.getText(), extensionlessCheckBox.isSelected(), namesField.getText(), ownersField.getText(),
+                        extensionsField.getText(), extensionlessCheckBox.isSelected(), namesField.getText(),
+                        ownersField.getText(),
                         parseFilterTime(modifiedAfterField, "Earliest modified time"),
                         parseFilterTime(modifiedBeforeField, "Latest modified time"),
                         parseBytes(minBytesField, "Minimum size"), parseBytes(maxBytesField, "Maximum size")),
@@ -684,6 +1097,10 @@ public final class BackupFrame extends JFrame {
         taskGate.close();
         scheduledBackupRunner.close();
         watchBackupService.close();
+        if (networkServer != null) {
+            networkServer.close();
+            networkServer = null;
+        }
     }
 
     private void styleFormComponent(Component component) {

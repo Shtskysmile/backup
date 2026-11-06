@@ -1,11 +1,13 @@
 # Backup
 
 Backup is a local Java 21 desktop backup tool built with Swing.
-The interface contains Backup, Restore and Automation tabs; no server is needed.
+The interface contains Backup, Restore, Automation and Network tabs; the Network tab adds an
+optional cloud mode that runs entirely on your own machines.
 
 ## Features
 
-- Recursive file discovery, including symbolic/hard links and POSIX FIFOs where supported
+- Recursive file discovery, including symbolic/hard links and POSIX special files
+  (FIFO pipes, character/block devices; sockets are recorded in manifests)
 - File selection by relative path/name glob, extension, modification time, byte size and owner
 - File metadata capture and best-effort restoration with warnings
 - ZIP and GZIP archives, with optional AES-GCM encryption
@@ -14,6 +16,8 @@ The interface contains Backup, Restore and Automation tabs; no server is needed.
 - Scheduled backups with `ScheduledExecutorService` and real-time backups with `WatchService`
 - Archive restore with path traversal and destination symlink protection
 - Compatibility with existing version 1 ZIP, GZIP and encrypted archives
+- Cloud mode: a built-in TLS receiver with PBKDF2-protected accounts, per-user storage,
+  manifest metadata management, incremental uploads and server-side group retention
 
 ## Run and test
 
@@ -69,6 +73,27 @@ Each archive has `.manifest.properties` and `.snapshot.properties` sidecars.
 The latter records group ownership and parent relationships for safe retention.
 The legacy `.backpack-manifest.properties` is still written for inspection, but is
 not loaded to resume another process's incremental baseline.
+
+## Network mode
+
+The Network tab turns the tool into a small cloud backup service:
+
+- **Server**: pick a storage directory and a port, press *Start server*. The first start
+  provisions a self-signed TLS certificate with the JDK's `keytool` and stores it in
+  `server-keystore.p12` inside the storage directory. Add accounts with a username and
+  password; only salted PBKDF2 verifiers are persisted.
+- **Client**: enter host, port and account, then back up a source directory with the same
+  compression/encryption/incremental options as local backups. Archives travel over TLS,
+  manifests and snapshot catalogs are stored per user on the server, and increments are
+  computed against the server-side manifest chain.
+- **Restore**: list snapshots, select one, and restore it into a local directory. Incremental
+  chains still restore in order (full first, then increments), exactly like local archives.
+- **Retention and cleanup**: `keep groups` prunes whole old groups on the server after each
+  successful upload; *Delete selected group* removes one older group and always protects the
+  newest snapshot.
+
+The client pins the server identity by trusting the server's keystore file, so both sides can
+run on the same machine or on a LAN host without a certificate authority.
 
 ## Restore
 

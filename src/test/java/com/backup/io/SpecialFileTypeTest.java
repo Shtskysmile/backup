@@ -159,4 +159,53 @@ class SpecialFileTypeTest {
         service.restoreDetailed(increment.archivePath(), out, null);
         assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(out.resolve("pipe"), LinkOption.NOFOLLOW_LINKS)));
     }
+
+    @Test void deviceEntriesRestoreWithWarningWhenRecreationIsImpossible() throws Exception {
+        Path source = Files.createDirectory(temp.resolve("source"));
+        Path file = Files.writeString(source.resolve("file"), "content");
+        List<BackupEntry> scanned = new FileScanner().scan(source);
+        BackupEntry device = new BackupEntry("ttyp3", false, 0, 1_600_000_000_000L, "", "rw-rw-rw-",
+                "", "", EntryType.CHARACTER_DEVICE, "4:3", null, null);
+        BackupManifest manifest = new BackupManifest(source.toString(), Instant.now(), CompressionType.ZIP, false, false,
+                List.of(scanned.getFirst(), device));
+        Path archive = temp.resolve("device.zip");
+        new ArchiveService().writeZipArchive(source, archive, manifest, List.of(scanned.getFirst(), device));
+        Path out = temp.resolve("device-out");
+        RestoreResult result = new ArchiveService().restoreDetailed(archive, out);
+        assertEquals("content", Files.readString(out.resolve("file")), "Regular entries restore normally");
+        assertTrue(result.warnings().stream().anyMatch(w -> w.contains("ttyp3") && w.contains("CHARACTER_DEVICE")),
+                "Expected a recreation warning: " + result.warnings());
+    }
+
+    @Test void invalidDeviceNumbersAreRejectedBeforeAnyWrite() throws Exception {
+        Path source = Files.createDirectory(temp.resolve("source"));
+        Files.writeString(source.resolve("file"), "content");
+        for (String bad : List.of("", "abc", "1:99999999", "-1:3", "1:2:3")) {
+            BackupEntry device = new BackupEntry("dev", false, 0, 1_600_000_000_000L, "", "", "",
+                    "", EntryType.BLOCK_DEVICE, bad, null, null);
+            BackupManifest manifest = new BackupManifest(source.toString(), Instant.now(), CompressionType.ZIP, false, false, List.of(device));
+            Path archive = temp.resolve("bad-" + Math.abs(bad.hashCode()) + ".zip");
+            new ArchiveService().writeZipArchive(source, archive, manifest, List.of(device));
+            Path out = temp.resolve("out-" + Math.abs(bad.hashCode()));
+            assertThrows(IOException.class, () -> new ArchiveService().restoreDetailed(archive, out), "device=" + bad);
+            assertFalse(Files.exists(out.resolve("dev")));
+        }
+    }
+
+    @Test void socketEntryIsRecordedButNeverRecreated() throws Exception {
+        Path source = Files.createDirectory(temp.resolve("source"));
+        Path file = Files.writeString(source.resolve("file"), "content");
+        List<BackupEntry> scanned = new FileScanner().scan(source);
+        BackupEntry socket = new BackupEntry("daemon.sock", false, 0, 1_600_000_000_000L, "", "", "",
+                "", EntryType.SOCKET, "", null, null);
+        BackupManifest manifest = new BackupManifest(source.toString(), Instant.now(), CompressionType.ZIP, false, false,
+                List.of(scanned.getFirst(), socket));
+        Path archive = temp.resolve("socket.zip");
+        new ArchiveService().writeZipArchive(source, archive, manifest, List.of(scanned.getFirst(), socket));
+        Path out = temp.resolve("socket-out");
+        RestoreResult result = new ArchiveService().restoreDetailed(archive, out);
+        assertEquals("content", Files.readString(out.resolve("file")));
+        assertTrue(result.warnings().stream().anyMatch(w -> w.contains("daemon.sock") && w.contains("socket")));
+        assertFalse(Files.exists(out.resolve("daemon.sock")));
+    }
 }

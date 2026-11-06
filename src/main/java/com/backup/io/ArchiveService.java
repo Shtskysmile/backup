@@ -127,6 +127,9 @@ public final class ArchiveService {
         for (BackupEntry entry : manifest.entries()) {
             safeResolve(root, entry.relativePath());
             if (entry.type() == EntryType.FIFO && (entry.size() != 0 || !entry.linkTarget().isEmpty())) throw new IOException("FIFO entries must have zero payload and no target");
+            if ((entry.type() == EntryType.CHARACTER_DEVICE || entry.type() == EntryType.BLOCK_DEVICE)
+                    && (entry.size() != 0 || !entry.linkTarget().matches("[0-9]{1,5}:[0-9]{1,5}"))) throw new IOException("Invalid device entry: " + entry.relativePath());
+            if (entry.type() == EntryType.SOCKET && (entry.size() != 0 || !entry.linkTarget().isEmpty())) throw new IOException("Socket entries must have zero payload and no target");
             if (result.put(entry.relativePath(), entry) != null) throw new IOException("Duplicate manifest path: " + entry.relativePath());
             if ((entry.type() == EntryType.HARD_LINK || entry.type() == EntryType.SYMBOLIC_LINK) && entry.linkTarget().isEmpty()) throw new IOException("Missing link target");
         }
@@ -168,6 +171,56 @@ public final class ArchiveService {
             } finally { Files.deleteIfExists(staged); }
         } else if (entry.type() == EntryType.FIFO && !restoreFifo(root, entry, warnings::add)) {
             skipped.add(entry.relativePath());
+        } else if ((entry.type() == EntryType.CHARACTER_DEVICE || entry.type() == EntryType.BLOCK_DEVICE
+                || entry.type() == EntryType.SOCKET) && !restoreDevice(root, entry, warnings::add)) {
+            skipped.add(entry.relativePath());
+        }
+    }
+
+    /** Devices are recreated with mknod when the platform and privileges allow; sockets are recorded only. */
+    private boolean restoreDevice(Path root, BackupEntry entry, Consumer<String> warnings) throws IOException {
+        Path out = safeResolve(root, entry.relativePath()); checkParents(root, out);
+        if (Files.isSymbolicLink(out)) throw new IOException("Refusing to overwrite symbolic link: " + out);
+        if (entry.type() == EntryType.SOCKET) {
+            warnings.accept(entry.relativePath() + ": unix domain sockets cannot be recreated by a backup tool");
+            return false;
+        }
+        Files.createDirectories(out.getParent());
+        Path staged = Files.createTempFile(out.getParent(), ".backup-device-", ".tmp");
+        Files.delete(staged);
+        try {
+            String[] parts = entry.linkTarget().split(":", 2);
+            String kind = entry.type() == EntryType.CHARACTER_DEVICE ? "c" : "b";
+            Process process = new ProcessBuilder("mknod", staged.toString(), kind, parts[0], parts[1])
+                    .redirectErrorStream(true).start();
+            try (InputStream output = process.getInputStream()) { output.readAllBytes(); }
+            boolean created = process.waitFor() == 0 && isSpecialType(staged, entry.type());
+            if (!created) throw new IOException("mknod did not create " + entry.type());
+            moveReplacing(staged, out);
+            return true;
+        } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
+            warnings.accept(entry.relativePath() + ": " + entry.type() + " not recreated (" + e.getMessage() + ")");
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            warnings.accept(entry.relativePath() + ": " + entry.type() + " not recreated (interrupted)");
+            return false;
+        } finally { Files.deleteIfExists(staged); }
+    }
+
+    private static boolean isSpecialType(Path path, EntryType expected) {
+        try {
+            Object value = Files.getAttribute(path, "unix:mode", LinkOption.NOFOLLOW_LINKS);
+            if (!(value instanceof Integer mode)) return false;
+            return switch (mode & 0170000) {
+                case 0010000 -> expected == EntryType.FIFO;
+                case 0020000 -> expected == EntryType.CHARACTER_DEVICE;
+                case 0060000 -> expected == EntryType.BLOCK_DEVICE;
+                case 0140000 -> expected == EntryType.SOCKET;
+                default -> false;
+            };
+        } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
+            return false;
         }
     }
 
@@ -232,6 +285,7 @@ public final class ArchiveService {
             case SYMBOLIC_LINK -> Files.isSymbolicLink(path) && Files.readSymbolicLink(path).toString().equals(entry.linkTarget());
             case FILE -> matchesFile(path, entry);
             case FIFO -> FifoSupport.isFifo(path);
+            case CHARACTER_DEVICE, BLOCK_DEVICE, SOCKET -> isSpecialType(path, entry.type());
             case HARD_LINK -> {
                 Path target = safeResolve(root, entry.linkTarget()); checkParents(root, target);
                 yield matchesFile(path, entry) && Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) && Files.isSameFile(path, target);
