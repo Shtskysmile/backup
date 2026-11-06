@@ -1,0 +1,57 @@
+@startuml usecase-system
+left to right direction
+skinparam packageStyle rectangle
+skinparam actorStyle awesome
+
+actor "普通用户" as User
+actor "定时调度器\n(FixedRate)" as Scheduler
+actor "目录监视器\n(WatchService)" as Watcher
+actor "网络客户端" as RemoteClient
+
+rectangle "Backup 文件备份软件" {
+  usecase "UC-01 执行备份" as UC1
+  usecase "扫描源目录树\n并采集元数据" as Inc1
+  usecase "判定增量条目" as Inc2
+  usecase "打包压缩归档" as Inc3
+  usecase "加密归档\n(AES-256-GCM)" as Inc4
+  usecase "UC-02 还原归档" as UC2
+  usecase "解密归档" as Inc5
+  usecase "校验路径安全性" as Inc6
+  usecase "回填文件元数据" as Inc7
+  usecase "UC-03 定时备份" as UC3
+  usecase "UC-04 实时备份" as UC4
+  usecase "UC-05 组保留淘汰" as UC5
+  usecase "UC-06 网络备份\n(网盘模式)" as UC6
+  usecase "UC-07 网络账号管理" as UC7
+  usecase "拒绝目标位于源目录内" as Ext1
+  usecase "口令缺失或错误" as Ext2
+  usecase "路径逃逸还原目录" as Ext3
+}
+
+User --> UC1
+User --> UC2
+User --> UC3
+User --> UC4
+User --> UC5
+User --> UC6
+User --> UC7
+Scheduler --> UC1
+Watcher --> UC1
+RemoteClient --> UC6
+
+UC1 ..> Inc1 : <<include>>
+UC1 ..> Inc2 : <<include>>
+UC1 ..> Inc3 : <<include>>
+UC1 ..> Inc4 : <<extend>>
+UC1 ..> Ext1 : <<extend>>
+UC2 ..> Inc5 : <<extend>>
+UC2 ..> Inc6 : <<include>>
+UC2 ..> Inc7 : <<include>>
+UC2 ..> Ext2 : <<extend>>
+UC2 ..> Ext3 : <<extend>>
+UC3 ..> UC1 : <<include>>
+UC4 ..> UC1 : <<include>>
+UC1 ..> UC5 : <<include>>
+UC6 ..> UC1 : <<include>>
+UC6 ..> UC2 : <<include>>
+@enduml

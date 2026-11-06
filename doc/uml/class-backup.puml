@@ -1,0 +1,182 @@
+@startuml class-backup
+skinparam classAttributeIconSize 0
+hide empty field
+hide empty method
+
+class BackupFrame {
+  -BackupService backupService
+  -ScheduledBackupRunner scheduledBackupRunner
+  -WatchBackupService watchBackupService
+  -BackupTaskGate taskGate
+  -NetworkBackupServer networkServer
+  +buildBackupOptionsFromFields() BackupOptions
+  -startBackupWorker(label, request)
+  -startRestoreWorker(archive, dest, pass)
+  -toggleNetworkServer()
+  -runNetworkBackup()
+}
+
+class BackupService {
+  +{static} taskIdentity(source, options) String
+  +backup(options) BackupResult
+  +restoreDetailed(archive, dest, pass) RestoreResult
+  -archiveFileName(options, incremental, id) String
+  -uniqueArchivePath(dest, filename) Path
+}
+
+class FileScanner {
+  +scan(root) List<BackupEntry>
+  +scan(root, filter, warnings) List<BackupEntry>
+  -capture(path, relative, attrs) RawEntry
+  -{static} classifySpecial(path, attrs) EntryType
+  -{static} deviceNumber(path) String
+}
+
+class BackupFilter {
+  +matches(path, size, modified, owner) boolean
+  +excludesDirectory(path) boolean
+  +identity() String
+}
+
+class BackupManifest {
+  +toBytes() byte[]
+  +store(manifestPath)
+  +{static} load(path) BackupManifest
+  +{static} fromString(text) BackupManifest
+}
+
+class BackupEntry {
+  +relativePath: String
+  +type: EntryType
+  +sha256: String
+  +sameContentAs(other) boolean
+}
+
+enum EntryType {
+  FILE
+  DIRECTORY
+  SYMBOLIC_LINK
+  HARD_LINK
+  FIFO
+  CHARACTER_DEVICE
+  BLOCK_DEVICE
+  SOCKET
+}
+
+class ArchiveService {
+  +writeZipArchive(source, out, manifest, entries)
+  +writeGzipArchive(source, out, manifest, entries)
+  +restoreDetailed(archive, dest) RestoreResult
+  -safeResolve(root, relative) Path
+  -restorePayload(root, entry, in, size, warnings, skipped)
+  -restoreFifo(root, entry, warnings) boolean
+  -restoreDevice(root, entry, warnings) boolean
+  -baselineMatches(root, entry) boolean
+}
+
+class FifoSupport {
+  +{static} isFifo(path) boolean
+  +create(entry, staged)
+}
+
+class SymbolicLinkPermissions {
+  +restore(link, permissions)
+}
+
+class EncryptionService {
+  +isEncrypted(file) boolean
+  +encrypt(input, output, passphrase)
+  +decryptToTempFile(input, pass) Path
+}
+
+class BackupCatalog {
+  +{static} publish(destination, snapshot)
+  +{static} prune(dest, taskId, keepGroups, warnings)
+  -{static} validateChain(members)
+}
+
+class ScheduledBackupRunner {
+  +start(period, task)
+  +stop()
+}
+
+class WatchBackupService {
+  +start(dir, debounce, task, sink)
+  +stop()
+  -watchLoop(...)
+  -registerTree(root, keys, session)
+}
+
+class BackupTaskGate {
+  +submitManual(starter) boolean
+  +submitAutomatic(key, starter)
+  +cancelAutomatic(key)
+  +complete()
+}
+
+class NetworkBackupServer {
+  +{static} start(port, storageRoot) NetworkBackupServer
+  +port() int
+  -authenticated(handler)
+  -handleUpload(exchange, user)
+  -handleCommit(exchange, user)
+  -handleSnapshots(exchange, user)
+}
+
+class NetworkBackupClient {
+  +ping() Properties
+  +upload(archive) String
+  +commit(token, manifest, keepGroups) Properties
+  +listSnapshots() List<RemoteSnapshot>
+  +fetchManifest(name) String
+  +download(name, target)
+  +deleteGroup(groupId) Properties
+}
+
+class NetworkBackupService {
+  +backup(client, options, keepGroups) NetworkBackupResult
+  +restore(client, name, dest, pass) RestoreResult
+}
+
+class NetworkUsers {
+  +{static} ensureUser(root, name, pass)
+  +{static} authenticate(root, name, pass) boolean
+  +{static} changePassword(root, name, old, new)
+}
+
+class PasswordHashes {
+  +{static} hash(password) Verifier
+  +{static} verify(password, stored) boolean
+}
+
+BackupFrame --> BackupTaskGate
+BackupFrame --> BackupService
+BackupFrame --> ScheduledBackupRunner
+BackupFrame --> WatchBackupService
+BackupFrame --> NetworkBackupServer
+BackupFrame --> NetworkBackupService
+BackupService --> FileScanner
+BackupService --> ArchiveService
+BackupService --> EncryptionService
+BackupService --> BackupCatalog
+BackupService --> BackupFilter
+BackupService --> BackupManifest
+ArchiveService --> BackupManifest
+ArchiveService --> FifoSupport
+ArchiveService --> SymbolicLinkPermissions
+ArchiveService --> BackupEntry
+FileScanner --> BackupEntry
+FileScanner --> BackupFilter
+BackupCatalog --> BackupManifest
+NetworkBackupService --> NetworkBackupClient
+NetworkBackupService --> BackupService
+NetworkBackupService --> FileScanner
+NetworkBackupService --> ArchiveService
+NetworkBackupService --> EncryptionService
+NetworkBackupServer --> NetworkUsers
+NetworkBackupServer --> BackupCatalog
+NetworkBackupServer --> BackupManifest
+NetworkUsers --> PasswordHashes
+ScheduledBackupRunner --> BackupTaskGate : 经 UI 提交
+WatchBackupService --> BackupTaskGate : 经 UI 提交
+@enduml

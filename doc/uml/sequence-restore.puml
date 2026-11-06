@@ -1,0 +1,51 @@
+@startuml sequence-restore
+skinparam responseMessageBelowArrow true
+actor 用户 as U
+participant "BackupFrame" as UI
+participant "BackupTaskGate" as GATE
+participant "BackupService" as SVC
+participant "EncryptionService" as ENC
+participant "ArchiveService" as IO
+participant "文件系统" as FS
+
+U -> UI : 选择归档与还原目录，点击 Restore
+UI -> GATE : submitManual(starter)
+UI -> SVC : restoreDetailed(archive, destination, pass)
+
+SVC -> ENC : isEncrypted(archive)
+alt 归档已加密
+  SVC -> ENC : decryptToTempFile(archive, pass)
+  ENC -> ENC : 校验魔数 BPACKENC1\nPBKDF2 派生密钥 → GCM 认证解密
+  alt 口令错误或数据被篡改
+    ENC --x SVC : IOException("Check the passphrase")
+    SVC --x UI : 还原失败，临时文件已清理
+  end
+end
+
+SVC -> IO : restoreDetailed(归档, root)
+IO -> IO : 读头部 4 字节识别格式（PK / 1F 8B）
+IO -> IO : 读清单 → validateManifest：\nsafeResolve 拒绝穿越/绝对路径/".."\n设备号白名单校验\n重复路径/非目录祖先拒绝
+
+loop 每个载荷条目
+  IO -> IO : checkParents（逐级拒绝符号链接）
+  alt 目录
+    IO -> FS : createDirectories
+  else 常规文件
+    IO -> FS : 写同目录临时文件 → 校验 SHA-256\n→ ATOMIC_MOVE 原子替换\n（不截断外部硬链接）
+  else FIFO
+    IO -> IO : mkfifo -m 权限（不打开流）\n属性验证 → 移动到位
+  else 字符/块设备
+    IO -> IO : mknod c/b 主 次（尽力而为）
+  else 套接字
+    IO -> IO : 只记录，产生警告
+  end
+end
+
+IO -> IO : finish()：重建硬链接（校验基文件哈希）\n重建符号链接（createSymbolicLink）
+IO -> IO : 增量条目：baselineMatches 核验基线内容\n一致才回填元数据，否则警告
+IO -> IO : 元数据按目录深度从深到浅回填\n（属主/组/权限/修改·访问·创建时间，尽力而为）
+IO --> SVC : RestoreResult(清单, 警告)
+SVC --> UI : 还原完成 + 警告列表
+UI --> U : 日志输出
+UI -> GATE : complete()
+@enduml

@@ -1,0 +1,50 @@
+@startuml sequence-network
+skinparam responseMessageBelowArrow true
+actor 用户 as U
+participant "BackupFrame\n(Network 页)" as UI
+participant "NetworkBackupService" as SVC
+participant "NetworkBackupClient" as CLI
+participant "NetworkBackupServer" as SRV
+participant "NetworkUsers" as USR
+participant "BackupCatalog" as CAT
+
+== 服务器启动（同一台或局域网另一台机器） ==
+U -> UI : Start server(存储目录, 端口)
+UI -> SRV : start(port, storageRoot)
+SRV -> SRV : 首次启动 keytool 自签证书\n(SAN: localhost/127.0.0.1)
+SRV -> SRV : 清扫残留 .incoming-*.part
+UI -> USR : ensureUser(用户名, 口令)
+USR -> USR : PBKDF2(210000) → 仅存盐值+验证值
+
+== 网络备份 ==
+U -> UI : Back up to server
+UI -> CLI : new（信任服务器密钥库文件）
+UI -> SVC : backup(client, options, keepGroups)
+SVC -> CLI : listSnapshots()
+CLI -> SRV : GET /api/snapshots (Basic 认证 over TLS)
+SRV --> CLI : Properties 快照列表
+SVC -> CLI : fetchManifest(最新归档名)
+CLI -> SRV : GET /api/manifest
+SRV --> CLI : 清单全文（增量基线）
+SVC -> SVC : 增量判定（与本地同规则）\n扫描 → 与基线比对 → 变化条目
+SVC -> SVC : 本地写归档（可选加密）
+SVC -> CLI : upload(归档)
+CLI -> SRV : POST /api/upload（流式）
+SRV -> SRV : 暂存 .incoming-<uuid>.part → 返回 token
+SVC -> CLI : commit(token, 清单, keepGroups)
+CLI -> SRV : POST /api/commit
+SRV -> SRV : 校验清单/归档名 → ATOMIC_MOVE 发布\n写清单旁挂 + 快照索引 + 最新清单
+SRV -> CAT : prune(users/<账号>, taskId, keepGroups)
+SRV --> CLI : stored + 警告
+SVC --> UI : NetworkBackupResult
+UI -> GATE : complete()
+
+== 网络还原 ==
+U -> UI : List snapshots → Restore selected
+UI -> CLI : download(归档名)
+CLI -> SRV : GET /api/download
+SRV --> CLI : 归档字节流
+UI -> SVC : restore(client, 归档名, 目标, 口令)
+SVC -> SVC : 调用本地 BackupService.restoreDetailed\n（安全/元数据语义与本地完全一致）
+SVC --> UI : RestoreResult
+@enduml

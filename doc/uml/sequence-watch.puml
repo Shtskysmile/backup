@@ -1,0 +1,40 @@
+@startuml sequence-watch
+skinparam responseMessageBelowArrow true
+actor 用户 as U
+participant "BackupFrame" as UI
+participant "WatchBackupService" as WATCH
+participant "WatchService" as WS
+participant "BackupTaskGate" as GATE
+participant "BackupService" as SVC
+
+U -> UI : Start realtime backup（防抖 5s）
+UI -> WATCH : start(source, debounce, task, sink)
+WATCH -> WS : newWatchService()
+WATCH -> WATCH : registerTree：为每个子目录\n注册 CREATE/MODIFY/DELETE
+WATCH -> WATCH : 单线程轮询循环启动
+
+loop 每 500ms 轮询
+  WS --> WATCH : 事件（创建/修改/删除）
+  alt 新目录被创建
+    WATCH -> WATCH : 动态 registerTree(新目录)
+  end
+  WATCH -> WATCH : dirty=true, lastChange=now
+end
+
+note over WATCH : 防抖：静默期达到 debounce 下限(250ms)\n才触发一次，吸收编辑器多事件
+
+WATCH -> GATE : submitAutomatic(key, starter)
+alt 闸门空闲
+  GATE -> UI : 调度 starter（EDT）
+  UI -> SVC : backup(options 快照)
+  SVC --> UI : BackupResult
+  UI -> GATE : complete()
+else 闸门忙（另一任务在跑）
+  GATE -> GATE : pending[key] = starter（合并保留最新）
+  note right : 同一任务多次触发只保留最新意图\n停止任务时 cancelAutomatic 移除
+end
+
+U -> UI : Stop realtime backup
+UI -> WATCH : stop() → watchService.close()
+WATCH -> WATCH : 旧会话循环检测 watchService==session\n失败后自然退出，不影响新会话
+@enduml

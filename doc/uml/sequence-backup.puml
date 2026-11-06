@@ -1,0 +1,46 @@
+@startuml sequence-backup
+skinparam responseMessageBelowArrow true
+actor 用户 as U
+participant "BackupFrame" as UI
+participant "BackupTaskGate" as GATE
+participant "BackupService" as SVC
+participant "FileScanner" as SCAN
+participant "ArchiveService" as IO
+participant "EncryptionService" as ENC
+participant "BackupCatalog" as CAT
+
+U -> UI : 填写参数，点击 Back up now
+UI -> UI : buildBackupOptionsFromFields()
+UI -> GATE : submitManual(starter)
+GATE -> UI : 调度 starter（EDT）
+UI -> SVC : backup(options)
+
+SVC -> SVC : 源/目标校验\n（目标不得在源内）
+SVC -> SVC : taskIdentity = SHA-256(路径+名称+筛选)
+SVC -> SCAN : scan(source, filter, warnings)
+SCAN --> SVC : List<BackupEntry>（类型/哈希/属主/时间）
+SVC -> SVC : 增量判定（基线兼容且链未满？）\narchived = 与基线不同的条目
+SVC -> SVC : 生成 Snapshot(taskId, groupId, parentId, sequence)
+
+SVC -> IO : writeZipArchive / writeGzipArchive(源, 明文临时, 清单, archived)
+loop 每个归档条目
+  IO -> IO : 边拷贝边算 SHA-256\n（不一致 → 拒绝发布）
+end
+IO --> SVC : 明文归档完成
+
+opt 勾选加密
+  SVC -> ENC : encrypt(明文临时, 目标临时, 口令)
+  ENC -> ENC : 随机盐 16B + IV 12B\nPBKDF2(210000) → AES-256-GCM
+  ENC --> SVC : 加密归档
+end
+
+SVC -> SVC : ATOMIC_MOVE 到最终归档名
+SVC -> SVC : manifest.store(清单旁挂)
+SVC -> CAT : publish(destination, snapshot)
+CAT -> CAT : verifyPair（归档+清单成对且身份一致）
+SVC -> CAT : prune(destination, taskId, keepGroups, warnings)
+CAT --> SVC : 删除结果/警告（保护最新组）
+SVC --> UI : BackupResult(条目数/字节/警告)
+UI --> U : 日志输出 + 状态徽标复位
+UI -> GATE : complete()（消费下一个待执行任务）
+@enduml

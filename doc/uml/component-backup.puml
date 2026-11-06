@@ -1,0 +1,59 @@
+@startuml component-backup
+skinparam componentStyle rectangle
+
+package "用户交互层" {
+  [BackupFrame\n(Swing 四标签页)] as UI
+}
+
+package "业务编排层" {
+  [BackupService\n(备份/还原编排·任务身份)] as CORE
+  [NetworkBackupService\n(网络备份编排)] as NETSVC
+  [BackupTaskGate\n(任务闸门·忙时合并)] as GATE
+}
+
+package "基础能力层" {
+  [FileScanner\n(树扫描·类型分类·属主)] as SCAN
+  [ArchiveService\n(ZIP/GZIP·安全还原)] as IO
+  [FifoSupport\n(管道·不打开流)] as FIFO
+  [SymbolicLinkPermissions\n(链接属性安全恢复)] as SLP
+  [EncryptionService\n(AES-GCM·PBKDF2)] as CRYPTO
+  [BackupCatalog\n(快照所有权·组保留)] as CATALOG
+  [BackupManifest\n(清单 v2)] as MANIFEST
+  [ScheduledBackupRunner] as SCHED
+  [WatchBackupService\n(防抖·动态注册)] as WATCH
+}
+
+package "网络子系统" {
+  [NetworkBackupServer\n(HTTPS·分段上传·发布)] as SERVER
+  [NetworkBackupClient\n(TLS·Basic 认证)] as CLIENT
+  [NetworkUsers + PasswordHashes\n(PBKDF2 账号存储)] as USERS
+}
+
+database "本地产物" as LOCAL {
+  folder "归档 + 清单旁挂\n+ 快照索引" as L1
+}
+database "服务器产物" as REMOTE {
+  folder "users/<账号>/\n同构目录布局" as R1
+}
+
+UI --> GATE
+GATE --> CORE
+GATE --> NETSVC
+CORE --> SCAN
+CORE --> IO
+CORE --> CRYPTO
+CORE --> CATALOG
+CORE --> MANIFEST
+NETSVC --> CLIENT
+NETSVC --> CORE
+CLIENT --> SERVER : HTTPS/TLS
+SERVER --> USERS
+SERVER --> CATALOG
+IO --> FIFO
+IO --> SLP
+IO --> MANIFEST
+CORE --> L1
+SERVER --> R1
+SCHED --> GATE
+WATCH --> GATE
+@enduml
