@@ -128,9 +128,9 @@ On a POSIX filesystem, FIFOs are archived as metadata-only entries and recreated
 `touch -c -h` commands with whole-second precision. Creation time and unsupported
 attribute operations produce explicit warnings. If recreation fails, the original
 destination is preserved and snapshot metadata is not applied to that failed path.
-Devices and sockets remain outside this local implementation.
+Character/block devices are recreated on a best-effort basis (`mknod`, which needs privileges; without them a warning is reported and the rest of the backup continues), and sockets are recorded but not recreated.
 
-Java 21 remains the compiler target. The 2026-11-05 macOS verification ran **87 tests**,
+Java 21 remains the compiler target. The 2026-11-08 macOS verification ran **104 tests**,
 with zero failures, errors or skips. Tests requiring unavailable POSIX attributes,
 symlinks, hardlinks, file identity or FIFO tools abort individually through JUnit
 assumptions on unsupported platforms, including Windows. Normal backup/encryption and
