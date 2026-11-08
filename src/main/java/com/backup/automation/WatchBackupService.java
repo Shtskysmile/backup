@@ -75,7 +75,7 @@ public final class WatchBackupService implements AutoCloseable {
             try {
                 watchService.close();
             } catch (IOException ignored) {
-                // Closing a watcher is best effort during shutdown.
+                // 关闭 watcher 是关闭流程的尽力而为，失败不阻断停止。
             }
         }
     }
@@ -96,7 +96,6 @@ public final class WatchBackupService implements AutoCloseable {
         try {
             while (running.get() && watchService == session) {
                 WatchKey key = session.poll(500, TimeUnit.MILLISECONDS);
-                // 有事件：反查目录 → 遍历事件（OVERVIEW 溢出直接置脏）→ 新目录动态注册 → 置脏计时。
                 // 有事件：反查目录 → 遍历事件（OVERFLOW 溢出直接置脏全量备份）→ 新目录动态注册 → 置脏计时。
     if (key != null) {
                     Path directory = watchedDirectories.get(key);
@@ -124,7 +123,6 @@ public final class WatchBackupService implements AutoCloseable {
                         watchedDirectories.remove(key);
                     }
                 }
-                // 防抖判定：静默期达到阈值才触发一次，且会话仍有效（防止旧会话触发新配置）。
                 // 防抖判定：静默期达到阈值才触发一次，且会话仍有效（防止旧会话以新配置触发）。
     if (running.get() && watchService == session && dirty && System.currentTimeMillis() - lastChange >= debounceMillis) {
                     dirty = false;
@@ -137,7 +135,7 @@ public final class WatchBackupService implements AutoCloseable {
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         } catch (java.nio.file.ClosedWatchServiceException ignored) {
-            // Expected after stop; an old session must never stop a replacement session.
+            // stop() 的预期退出路径；旧会话绝不能顺带停掉替换它的新会话。
         } catch (RuntimeException e) {
             emit(statusSink, "Watch backup stopped: " + e.getMessage());
         } finally {

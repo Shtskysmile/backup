@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class NetworkUserStoreTest {
     @TempDir Path root;
 
-    /** 用例 createdUserAuthenticatesAndPersistsAcrossInstances：网络账号存储 的具体场景，断言即预期行为。 */
+    /** 建号后正确口令通过；错误口令/未知用户/空口令拒绝；users.properties 拷贝到新实例仍可认证（持久化）。 */
     @Test void createdUserAuthenticatesAndPersistsAcrossInstances() throws Exception {
         NetworkUsers.ensureUser(root, "alice", "wonder^secret".toCharArray());
         assertTrue(NetworkUsers.authenticate(root, "alice", "wonder^secret".toCharArray()));
@@ -36,7 +36,7 @@ class NetworkUserStoreTest {
         assertTrue(NetworkUsers.authenticate(other, "alice", "wonder^secret".toCharArray()));
     }
 
-    /** 用例 storedRecordsAreSaltedVerifiersNotPasswords：网络账号存储 的具体场景，断言即预期行为。 */
+    /** 落盘内容只有盐与验证值：明文口令绝不出现。 */
     @Test void storedRecordsAreSaltedVerifiersNotPasswords() throws Exception {
         NetworkUsers.ensureUser(root, "bob", "builder".toCharArray());
         String stored = Files.readString(root.resolve(NetworkUsers.FILE_NAME));
@@ -45,7 +45,7 @@ class NetworkUserStoreTest {
         assertTrue(stored.contains("bob.salt="));
     }
 
-    /** 用例 duplicateAndInvalidUsernamesAreRejected：网络账号存储 的具体场景，断言即预期行为。 */
+    /** 重复用户名、穿越名、带空格、空名、空口令全部拒绝；非法名也无法通过认证。 */
     @Test void duplicateAndInvalidUsernamesAreRejected() throws Exception {
         NetworkUsers.ensureUser(root, "carol", "pass-1".toCharArray());
         assertThrows(IOException.class, () -> NetworkUsers.ensureUser(root, "carol", "pass-2".toCharArray()));
@@ -56,7 +56,7 @@ class NetworkUserStoreTest {
         assertFalse(NetworkUsers.authenticate(root, "../eve", "pass".toCharArray()));
     }
 
-    /** 用例 changePasswordVerifiesTheOldPassword：网络账号存储 的具体场景，断言即预期行为。 */
+    /** 改密码必须先验证旧口令：旧口令错误则拒绝；改完新口令可用、旧口令失效。 */
     @Test void changePasswordVerifiesTheOldPassword() throws Exception {
         NetworkUsers.ensureUser(root, "erin", "old-pass".toCharArray());
         assertThrows(IOException.class, () -> NetworkUsers.changePassword(root, "erin", "nope".toCharArray(), "new-pass".toCharArray()));

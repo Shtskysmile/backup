@@ -26,7 +26,6 @@ import java.util.function.Consumer;
  * <p>该类同时被本地 BackupService 与网络 NetworkBackupServer 复用，
  * 服务器端保留因此与本地语义逐字节一致。</p>
  */
-/** Ownership catalog for completed archives. Retention is explicit and operates on full chains. */
 public final class BackupCatalog {
     private static final String INDEX = ".snapshot.properties";
     private static final String MANIFEST = ".manifest.properties";
@@ -51,7 +50,7 @@ public final class BackupCatalog {
             try (Writer out = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
                 properties(snapshot).store(out, "Completed backup snapshot");
             }
-            // Never expose a partially written index, including on filesystems without atomic moves.
+            // 永不暴露写了一半的索引：即便文件系统不支持原子移动，也要先写临时文件再换名。
             Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally {
             Files.deleteIfExists(temporary);
@@ -88,7 +87,7 @@ public final class BackupCatalog {
                 }
             }
         }
-        // An unreadable record may name any group: do not guess which archives it owns.
+        // 一条读不出的记录可能属于任何组：绝不猜测它拥有哪些档案——这是保守原则的根基。
         if (corrupt) return;
         Map<String, List<Snapshot>> groups = new HashMap<>();
         // 按组聚合 → 逐组验链 → 有效组按时间倒序 → 从第 N+1 个组开始删（保护最新组）。

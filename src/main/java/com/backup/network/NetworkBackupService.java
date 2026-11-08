@@ -27,12 +27,6 @@ import java.util.Properties;
 import java.util.UUID;
 
 /**
- * Client-side orchestration for cloud backups. Incremental chains follow the same rules as the
- * local service: one full backup plus at most nine increments per task, restarts begin with a
- * full backup, and changing compression, encryption or the passphrase starts a new group.
- * The previous chain state comes from the server's stored manifests instead of a local cache.
- */
-/**
  * 客户端网络备份编排：把"本地备份"的语义搬到服务器上，规则与本地完全一致。
  *
  * <p>增量基线来自服务器：以 BackupService.taskIdentity（与本地同一算法）定位任务，

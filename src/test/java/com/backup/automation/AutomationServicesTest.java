@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class AutomationServicesTest {
     @TempDir Path temp;
 
-    /** 用例 failedWatchStartDoesNotLeaveServiceRunning：自动化（定时触发/实时监听/会话恢复） 的具体场景，断言即预期行为。 */
+    /** 监听不存在的目录启动失败：服务不得残留运行状态；随后对真实目录正常启动应成功。 */
     @Test void failedWatchStartDoesNotLeaveServiceRunning() throws Exception {
         try (WatchBackupService watcher = new WatchBackupService()) {
             assertThrows(java.io.IOException.class, () -> watcher.start(temp.resolve("missing"), Duration.ofMillis(250), () -> {}, null));
@@ -29,7 +29,7 @@ class AutomationServicesTest {
         }
     }
 
-    /** 用例 watcherDetectsChangeAfterRestart：自动化（定时触发/实时监听/会话恢复） 的具体场景，断言即预期行为。 */
+    /** 监听重启后旧会话完全退场：新会话仍能感知文件修改并触发备份回调（会话隔离）。 */
     @Test void watcherDetectsChangeAfterRestart() throws Exception {
         CountDownLatch changed = new CountDownLatch(1);
         try (WatchBackupService watcher = new WatchBackupService()) {
@@ -41,7 +41,7 @@ class AutomationServicesTest {
         }
     }
 
-    /** 用例 schedulerRunsThenStops：自动化（定时触发/实时监听/会话恢复） 的具体场景，断言即预期行为。 */
+    /** 定时调度器按 1 秒周期真实触发一次回调；stop 后 isRunning 立即为 false。 */
     @Test void schedulerRunsThenStops() throws Exception {
         CountDownLatch fired = new CountDownLatch(1);
         try (ScheduledBackupRunner runner = new ScheduledBackupRunner()) {

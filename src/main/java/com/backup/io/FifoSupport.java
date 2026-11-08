@@ -13,7 +13,6 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
-/** POSIX pipe operations never open a pipe's data stream, including while restoring attributes. */
 /**
  * POSIX 管道（FIFO）支持：核心不变量是【任何代码路径都不打开管道的数据流】——
  * 打开读端会阻塞到有写者出现，备份/还原若误读管道即永久挂死。
@@ -31,6 +30,7 @@ final class FifoSupport {
     FifoSupport() { this("mkfifo", "touch"); }
     FifoSupport(String mkfifo, String touch) { this.mkfifo = mkfifo; this.touch = touch; }
 
+    /** 判断路径是否为 FIFO（读 unix:mode 类型位；不支持的平台安静返回 false）。 */
     static boolean isFifo(Path path) {
         try {
             Object mode = Files.getAttribute(path, "unix:mode", LinkOption.NOFOLLOW_LINKS);
@@ -38,6 +38,7 @@ final class FifoSupport {
         } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) { return false; }
     }
 
+    /** 在临时路径创建 FIFO：权限取自清单（缺省 0600），创建后用类型位复核防假成功。 */
     void create(BackupEntry entry, Path staged) throws IOException {
         int mode = 0600;
         // 权限换算：清单里的 POSIX 串 → mkfifo -m 八进制；缺省 0600。
@@ -66,7 +67,7 @@ final class FifoSupport {
     /** 用 touch -c -h 恢复管道时间：不打开流；工具缺失/失败由调用方转为警告。 */
     private void restoreTime(BackupEntry entry, Path path, String flag, long millis, String name, Consumer<String> warnings) {
         try {
-            // -h prevents following a replaced symlink; UTC avoids local DST ambiguity.
+            // -h 不跟随（可能已被换名的）符号链接；UTC 时间避免本地夏令时的歧义。
             run(List.of(touch, "-c", "-h", flag, "-t", TOUCH_TIME.format(Instant.ofEpochMilli(millis)), path.toString()));
             if (Math.floorMod(millis, 1000) != 0) warnings.accept(entry.relativePath() + ": FIFO " + name + " restored with whole-second precision");
         } catch (IOException | RuntimeException e) {

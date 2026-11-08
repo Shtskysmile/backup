@@ -8,7 +8,6 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-/** Restores a link's own mode without invoking JDK setters that can follow its target on macOS. */
 /**
  * 软链接自身权限的安全恢复：JDK 的权限 setter 在部分平台会跟随链接改到目标
  * （历史上有安全风险），因此改用 BSD chmod -h（lchmod 语义）只作用于链接本身。
@@ -44,7 +43,7 @@ final class SymbolicLinkPermissions {
         // 工具输出落临时日志：失败时消息里带回摘要，便于诊断。
         Process process = null;
         try {
-            // BSD chmod -h uses lchmod: broken/absolute/directory links are never dereferenced.
+            // BSD chmod -h 即 lchmod：断链/绝对路径/指向目录的链接都绝不会被解引用。
             process = new ProcessBuilder(chmod, "-h", Integer.toOctalString(mode), link.toAbsolutePath().toString())
                     .redirectErrorStream(true).redirectOutput(log.toFile()).start();
             if (!process.waitFor(5, TimeUnit.SECONDS)) throw new IOException("Symbolic-link chmod timed out after 5 seconds");

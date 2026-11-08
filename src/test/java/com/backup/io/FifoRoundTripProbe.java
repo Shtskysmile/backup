@@ -5,8 +5,12 @@ import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.util.*;
 
-/** Runs in a child JVM so a native FIFO open regression cannot hang the test runner. */
+/**
+ * FIFO 往返探针：在独立子 JVM 中运行，即使某次回归真的误打开了管道数据流
+ * （会永久阻塞），也只是探针超时失败，测试运行器本身不会被挂死。
+ */
 public class FifoRoundTripProbe {
+    /** 参数：工作目录、压缩格式、是否加密；建 FIFO → 扫描 → 备份 → 删除 → 还原 → 复核类型与权限。 */
     public static void main(String[] args) throws Exception {
         Path root = Path.of(args[0]);
         CompressionType type = CompressionType.valueOf(args[1]);

@@ -28,7 +28,7 @@ class LocalBackupServiceTest {
         return new BackupOptions(source, temp.resolve("backups"), name, CompressionType.ZIP, incremental, false, null, filter, keep);
     }
 
-    /** 用例 filtersBeforeChoosingHardlinkPayloadAndKeepsAncestors：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
+    /** 筛选先行：b.txt 被选中而互为硬链接的 a.txt 被筛掉后，载荷只带 b.txt 不退化成普通拷贝；命中条目的祖先目录保留、空目录剪除。 */
     @Test void filtersBeforeChoosingHardlinkPayloadAndKeepsAncestors() throws Exception {
         assumeHardLinks(temp);
         Path source = Files.createDirectories(temp.resolve("source/docs"));
@@ -47,7 +47,7 @@ class LocalBackupServiceTest {
         assertEquals(2, BackupManifest.load(result.manifestPath()).entries().size());
     }
 
-    /** 用例 changingTaskOrRestartingNeverReusesAnotherBaseline：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
+    /** 基线隔离：换源目录、换任务名、换服务实例（模拟重启）都不续链，一律全量。 */
     @Test void changingTaskOrRestartingNeverReusesAnotherBaseline() throws Exception {
         Path first = Files.createDirectory(temp.resolve("first"));
         Path second = Files.createDirectory(temp.resolve("second"));
@@ -62,7 +62,7 @@ class LocalBackupServiceTest {
         assertEquals("same", Files.readString(out.resolve("file")));
     }
 
-    /** 用例 retentionRollsGroupsAndKeepsWholeLatestGroup：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
+    /** 12 连备 keepGroups=1：前 10 个归档被整组淘汰，第 11/12 个保留且构成完整链（全量→增量，父子关系正确）。 */
     @Test void retentionRollsGroupsAndKeepsWholeLatestGroup() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Files.writeString(source.resolve("file"), "content");
@@ -79,7 +79,7 @@ class LocalBackupServiceTest {
         assertEquals(full.snapshot().groupId(), incremental.snapshot().groupId());
     }
 
-    /** 用例 failedBackupDoesNotPrunePreviousSuccess：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
+    /** 备份中途失败（源目录消失）：此前成功备份的归档与清单原样保留，淘汰不执行。 */
     @Test void failedBackupDoesNotPrunePreviousSuccess() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source")); Files.writeString(source.resolve("file"), "ok");
         BackupService service = new BackupService(); BackupOptions options = options(source, "chain", false, 1, BackupFilter.all());
@@ -89,7 +89,7 @@ class LocalBackupServiceTest {
         assertTrue(Files.exists(first.archivePath())); assertTrue(Files.exists(first.manifestPath()));
     }
 
-    /** 用例 metadataOnlyChangesAreIncludedInIncremental：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
+    /** 仅权限/时间变化也触发增量：增量含 1 条目，还原后权限与修改时间精确回填。 */
     @Test void metadataOnlyChangesAreIncludedInIncremental() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source")); Path file = Files.writeString(source.resolve("file"), "same");
         assumePosix(file);
@@ -104,7 +104,7 @@ class LocalBackupServiceTest {
         assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(out.resolve("file"))));
     }
 
-    /** 用例 sourceAliasCannotPlaceDestinationInsideSource：备份服务级行为（筛选/保留/失败路径） 的具体场景，断言即预期行为。 */
+    /** 通过符号链接别名偷渡目标进源目录：toRealPath 双重校验识破并拒绝。 */
     @Test void sourceAliasCannotPlaceDestinationInsideSource() throws Exception {
         assumeDirectorySymbolicLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));

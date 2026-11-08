@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * - closeDiscardsPendingAndRejectsFurtherWork
  */
 class BackupTaskGateTest {
-    /** 用例 manualTasksAreExclusiveUntilCompletion：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
+    /** 手动任务独占闸门：任务运行期间再次手动提交被拒绝，complete 之后闸门才放行新任务。 */
     @Test void manualTasksAreExclusiveUntilCompletion() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -41,7 +41,7 @@ class BackupTaskGateTest {
         assertEquals(List.of("backup", "restore"), events);
     }
 
-    /** 用例 latestAutomaticEventRunsOnceAfterActiveTaskCompletes：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
+    /** 忙碌期间的多个自动请求只保留同 key 最新一个：旧的计划事件被覆盖，complete 后仅执行 latest watch。 */
     @Test void latestAutomaticEventRunsOnceAfterActiveTaskCompletes() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -61,7 +61,7 @@ class BackupTaskGateTest {
         assertTrue(queue.isEmpty());
     }
 
-    /** 用例 automaticEventDuringFollowupIsRetainedWithoutRetryingCompletedTasks：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
+    /** 接力执行期间到达的自动请求仍会排队：one→two→three 依次执行，且绝不重跑已完成的任务。 */
     @Test void automaticEventDuringFollowupIsRetainedWithoutRetryingCompletedTasks() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -80,7 +80,7 @@ class BackupTaskGateTest {
         assertTrue(queue.isEmpty());
     }
 
-    /** 用例 starterFailureReleasesGateAndDispatchesPendingEvent：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
+    /** worker 启动即抛异常：闸门释放并继续派发排队的自动请求——失败不制造重试，也不卡死队列。 */
     @Test void starterFailureReleasesGateAndDispatchesPendingEvent() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -94,7 +94,7 @@ class BackupTaskGateTest {
         assertFalse(gate.isBusy());
     }
 
-    /** 用例 synchronousDispatcherFailureDoesNotUnlockActiveFollowup：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
+    /** 内联 executor 下 starter 同步执行了后继任务：后继已被受理时提交失败不得回滚闸门状态（busy 保持）。 */
     @Test void synchronousDispatcherFailureDoesNotUnlockActiveFollowup() {
         var gate = new BackupTaskGate(Runnable::run);
         var events = new ArrayList<String>();
@@ -109,7 +109,7 @@ class BackupTaskGateTest {
         assertFalse(gate.isBusy());
     }
 
-    /** 用例 distinctAutomationSnapshotsSurviveWhileSameKeyCoalescesInOrder：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
+    /** 不同 key 的自动请求互不覆盖、按到达顺序执行；同 key（watch B）只保留最新意图，old B 被丢弃。 */
     @Test void distinctAutomationSnapshotsSurviveWhileSameKeyCoalescesInOrder() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -129,7 +129,7 @@ class BackupTaskGateTest {
         assertTrue(queue.isEmpty());
     }
 
-    /** 用例 cancelRemovesOnlyStoppedAutomationPendingWork：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
+    /** cancelAutomatic 只移除指定 key 的排队请求（watch 被取消不执行），其他任务（schedule）不受影响。 */
     @Test void cancelRemovesOnlyStoppedAutomationPendingWork() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);
@@ -147,7 +147,7 @@ class BackupTaskGateTest {
         assertTrue(queue.isEmpty());
     }
 
-    /** 用例 closeDiscardsPendingAndRejectsFurtherWork：任务闸门状态机（串行/合并/取消/竞态） 的具体场景，断言即预期行为。 */
+    /** close 清空所有排队任务；此后手动/自动提交全部被拒绝，闸门回到空闲。 */
     @Test void closeDiscardsPendingAndRejectsFurtherWork() {
         var queue = new ArrayDeque<Runnable>();
         var gate = new BackupTaskGate(queue::add);

@@ -12,20 +12,26 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Immutable, normalized file/link selection criteria. Alternatives are separated by semicolons;
- * different criteria intersect and exclusions win. Paths use relative forward-slash syntax,
- * names match only the basename, and globs are case sensitive. A double-star directory component
- * also matches zero directories. Extension comparisons ignore case and an optional leading dot.
- * Dotfiles and names ending in a dot count as extensionless. With no extensions specified,
- * includeExtensionless=false means no type restriction; true selects only extensionless names.
- * Time and byte bounds include both endpoints. Owner names are compared exactly but without
- * case sensitivity; a blank recorded owner never matches a nonempty owner criterion.
- * Directory pruning uses only explicit exclusions.
+ * 不可变、规范化后的文件/链接筛选条件（record 值对象，模块间唯一筛选契约）。
+ *
+ * <p>匹配语义：</p>
+ * <ul>
+ *   <li>同类多值用分号分隔（OR 关系）；不同类条件之间取交集（AND 关系）；
+ *       排除规则永远优先于包含规则；</li>
+ *   <li>路径条件使用相对正斜杠语法；名字条件只匹配最后一级文件名（基名）；
+ *       glob 语法区分大小写；</li>
+ *   <li>「双星目录段」（两个星号后跟斜杠）还能匹配零层目录（标准 glob 不支持，是本类的语义扩展）；</li>
+ *   <li>扩展名比较忽略大小写与前导点；点文件（.bashrc）和以点结尾的名字视为无扩展名；</li>
+ *   <li>未指定扩展名时：includeExtensionless=false 表示不限类型；true 表示只保留无扩展名文件；</li>
+ *   <li>时间与字节边界均为闭区间（含端点）；</li>
+ *   <li>属主名精确比较但不区分大小写；记录为空的属主永远不命中非空的属主条件；</li>
+ *   <li>目录剪枝只看显式排除规则（包含规则不用于剪枝，避免误跳过子树内被包含的文件）。</li>
+ * </ul>
  */
 public record BackupFilter(String includePaths, String excludePaths, String extensions,
                            boolean includeExtensionless, String names, String owners, Long modifiedAfterMillis,
                            Long modifiedBeforeMillis, Long minBytes, Long maxBytes) {
-    // Records cannot hold additional instance state. A bounded cache avoids compiling globs per file.
+    // record 不能再挂实例字段：glob 编译缓存只能做成静态有界 LRU，避免扫描大目录时每个文件重复编译。
     private static final Map<String, List<Pattern>> GLOBS = Collections.synchronizedMap(
             new LinkedHashMap<>(32, .75f, true) {
                 @Override protected boolean removeEldestEntry(Map.Entry<String, List<Pattern>> entry) {
@@ -52,7 +58,7 @@ public record BackupFilter(String includePaths, String excludePaths, String exte
         patterns(names);
     }
 
-    /** Convenience constructor for criteria without an owner condition. */
+    /** 无属主条件的便捷构造器（九参旧签名兼容，属主视为未提供）。 */
     public BackupFilter(String includePaths, String excludePaths, String extensions, boolean includeExtensionless,
                         String names, Long modifiedAfterMillis, Long modifiedBeforeMillis, Long minBytes, Long maxBytes) {
         this(includePaths, excludePaths, extensions, includeExtensionless, names, "",
@@ -117,7 +123,7 @@ public record BackupFilter(String includePaths, String excludePaths, String exte
                 && minBytes == null && maxBytes == null;
     }
 
-    /** Deterministic, unambiguous representation suitable for deriving a task identity. */
+    /** 确定性、无歧义的字符串表示：同一筛选语义必得同一字符串，适合派生任务身份。 */
     public String identity() {
         StringBuilder result = new StringBuilder("filter-v2:");
         for (String value : List.of(includePaths, excludePaths, extensions, Boolean.toString(includeExtensionless),
@@ -166,7 +172,7 @@ public record BackupFilter(String includePaths, String excludePaths, String exte
      * 花括号为分组、字符类内特殊字符转义并保证不匹配斜杠。
      */
     private static Pattern compileGlob(String glob) {
-        // Validate standard glob syntax before applying the zero-directory **/ extension.
+        // 先按标准 glob 语法校验合法性（非法语法在此抛出），再应用「零层目录双星」语义扩展。
         FileSystems.getDefault().getPathMatcher("glob:" + glob);
         StringBuilder regex = new StringBuilder();
         boolean group = false;

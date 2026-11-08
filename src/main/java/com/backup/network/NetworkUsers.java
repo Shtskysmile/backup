@@ -13,10 +13,6 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Server-side account store. Accounts live in a single properties file guarded by atomic moves;
- * only salted PBKDF2 verifiers are persisted, never the passwords themselves.
- */
-/**
  * 服务器端账号存储：单文件 users.properties，仅持久化 PBKDF2 验证值（明文口令永不落盘）。
  *
  * <p>安全设计：① 用户名白名单 [A-Za-z0-9][A-Za-z0-9._-]{0,31} 且映射为
@@ -64,7 +60,7 @@ public final class NetworkUsers {
         Files.createDirectories(userDirectory(storageRoot, username));
     }
 
-    /** Constant-time credential check; unknown users still cost one verification. */
+    /** 恒定时间凭据校验：未知用户同样执行一次完整推导，消除用户枚举时序侧信道。 */
     public static synchronized boolean authenticate(Path storageRoot, String username, char[] password) throws IOException {
         if (username == null || password == null || password.length == 0) return false;
         Properties users = load(storeFile(storageRoot));

@@ -24,11 +24,6 @@ import java.util.List;
 import java.util.Properties;
 
 /**
- * HTTPS client for the network backup service. Credentials travel inside the TLS channel as an
- * HTTP Basic header; the server identity is pinned by explicitly trusting a keystore file
- * (by default the server's own generated keystore), so no certificate authority is required.
- */
-/**
  * 网络备份的 HTTPS 客户端封装。
  *
  * <p>安全模型：凭据以 Basic 头随每个请求发送，全程走 TLS；信任根显式钉定到
@@ -70,12 +65,11 @@ public final class NetworkBackupClient implements AutoCloseable {
     }
 
     /** GET /api/ping：连接与认证自检。 */
-    /** GET /api/ping：连接与认证自检。 */
     public Properties ping() throws IOException, InterruptedException {
         return request("GET", "/api/ping", null, null);
     }
 
-    /** Uploads an archive; returns the staging token for the following commit. */
+    /** 第一段上传：归档原样 PUT 到暂存区，返回暂存令牌供第二段提交使用。 */
     public String upload(Path archive) throws IOException, InterruptedException {
         HttpRequest request = builder("/api/upload")
                 .header("Content-Type", "application/octet-stream")
@@ -228,10 +222,9 @@ public final class NetworkBackupClient implements AutoCloseable {
             } else {
                 context.init(null, null, null);
             }
-            // Identity trust is pinned by the provided keystore; hostname checking is relaxed so
-            // the built-in certificate also works for LAN addresses.
-            SSLParameters parameters = new SSLParameters();
             // 信任已钉定到密钥库文件，主机名校验放宽以支持 localhost/局域网 IP。
+            SSLParameters parameters = new SSLParameters();
+            // （同上）端点识别算法置空即放松主机名校验；身份保证来自被钉定的密钥库而非证书链。
             parameters.setEndpointIdentificationAlgorithm(null);
             context.getDefaultSSLParameters().setEndpointIdentificationAlgorithm(null);
             return context;
@@ -251,7 +244,7 @@ public final class NetworkBackupClient implements AutoCloseable {
         return closed;
     }
 
-    /** Records one snapshot listed by the server. */
+    /** 服务器列表中的一条远端快照（清单身份字段 + 归档大小，UI 展示/基线判定用）。 */
     public record RemoteSnapshot(String taskId, String snapshotId, String groupId, String parentId,
                                  int sequence, String archiveName, java.time.Instant createdAt, long bytes) {}
 }

@@ -5,13 +5,6 @@ import java.util.LinkedHashMap;
 import java.util.concurrent.Executor;
 
 /**
- * Serializes asynchronous backup/restore workers. The executor dispatches worker starters
- * (the UI supplies SwingUtilities::invokeLater); each worker must call complete exactly once.
- * While busy, each automation key retains one latest pending starter, in first-arrival order.
- * Completion consumes each pending starter once;
- * failures do not manufacture retries. Manual requests are rejected while busy.
- */
-/**
  * 异步备份/还原任务的串行闸门：同一时刻至多一个 worker 在跑，杜绝并发写同一目录。
  *
  * <p>状态机：idle →(submit*)→ busy →(complete 且无 pending)→ idle；busy 期间
@@ -63,7 +56,7 @@ public final class BackupTaskGate implements AutoCloseable {
         }
     }
 
-    /** Removes queued work for a stopped automation; an already running worker finishes normally. */
+    /** 移除已停止自动化的排队请求；已在运行的 worker 不受影响、正常跑完。 */
     public synchronized void cancelAutomatic(Object taskKey) {
         pending.remove(Objects.requireNonNull(taskKey));
     }
@@ -96,7 +89,7 @@ public final class BackupTaskGate implements AutoCloseable {
                 }
             });
         } catch (RuntimeException | Error failure) {
-            // An inline executor can propagate a starter failure after complete dispatched a successor.
+            // 内联 executor 场景：complete 派发的后继任务可能已经执行完，此时不得回滚状态。
             if (!started[0]) {
                 busy = false;
                 pending.clear();

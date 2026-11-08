@@ -25,7 +25,6 @@ import java.util.*;
  * <p>实例方法均为 synchronized：同一实例内的备份与还原天然串行，
  * 与 UI 层 BackupTaskGate 的任务闸门形成两级串行保护。</p>
  */
-/** Single-instance operations are serialized; no server or persistent password state is required. */
 public final class BackupService {
     private static final String LATEST_MANIFEST_NAME = ".backpack-manifest.properties";
     private static final DateTimeFormatter ARCHIVE_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");

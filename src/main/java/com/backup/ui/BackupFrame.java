@@ -741,7 +741,7 @@ public final class BackupFrame extends JFrame {
         if (index < 0) throw new IllegalStateException("List snapshots first, then select one.");
         try {
             java.util.List<NetworkBackupClient.RemoteSnapshot> snapshots;
-            // The combo mirrors the latest listing; re-query so actions use fresh server state.
+            // 下拉框只是上次列表的镜像；操作前按索引重查一次，保证动作基于服务器最新状态。
             try (NetworkBackupClient client = connectedClient()) {
                 snapshots = client.listSnapshots();
             }

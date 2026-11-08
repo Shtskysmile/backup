@@ -9,7 +9,6 @@ import java.nio.file.attribute.PosixFileAttributeView;
 
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-/** Capability checks use separate scratch paths so failures in test fixtures remain failures. */
 /**
  * 平台能力探测（测试基础设施）：一次性探测 POSIX 视图、符号/硬链接创建、
  * 文件身份、mkfifo 可用性，供各测试套件 assumeTrue 守卫——
