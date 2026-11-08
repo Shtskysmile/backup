@@ -173,6 +173,9 @@ public final class BackupFrame extends JFrame {
     private final JButton networkPingButton = new JButton("Test connection");
     private final JButton addUserButton = new JButton("Add user");
     private volatile com.backup.network.NetworkBackupServer networkServer;
+    // 网络备份服务整个窗口只建一个：加密链的口令"记忆"存在服务实例里，若每次点击都 new 一个，
+    // 勾选 Encrypt archive 的第二次备份就永远退化为全量（与本地 backupService 是单实例同理）。
+    private final NetworkBackupService networkBackupService = new NetworkBackupService();
 
     /** 主窗口装配：页签 + 日志 + 关闭钩子（关闭窗口时停止调度器/监视器/网络服务器并释放闸门）。 */
     public BackupFrame() {
@@ -445,35 +448,42 @@ public final class BackupFrame extends JFrame {
 
         JPanel clientForm = formPanel("Client (cloud backup)");
         int row = 0;
-        // 连接区：地址/端口/账号/口令 + 连接自检按钮（一次 ping 验证 TLS 信任与账号）。
-        JPanel endpointRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        endpointRow.setOpaque(false);
-        endpointRow.add(new JLabel("Host"));
-        endpointRow.add(networkHostField);
-        endpointRow.add(new JLabel("Port"));
-        endpointRow.add(networkPortSpinner);
-        endpointRow.add(new JLabel("User"));
-        endpointRow.add(networkUserField);
-        endpointRow.add(new JLabel("Password"));
-        endpointRow.add(networkPasswordField);
+        // 连接区：地址/端口 + 账号/口令分两行，连接自检按钮（一次 ping 验证 TLS 信任与账号）单独一行放在它们下面：先填再测。
+        // FlowLayout 一行不会自动换行：单行控件过多会把整页撑到比窗口还宽，而页面的横向滚动条被禁用，
+        // 多出的部分（Password、Test connection、Choose 按钮……）就被静默裁掉，所以每一行都要窄于默认窗口。
+        JPanel hostRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        hostRow.setOpaque(false);
+        hostRow.add(new JLabel("Host"));
+        hostRow.add(networkHostField);
+        hostRow.add(new JLabel("Port"));
+        hostRow.add(networkPortSpinner);
+        addRow(clientForm, row++, "Server", hostRow);
+        JPanel accountRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        accountRow.setOpaque(false);
+        accountRow.add(new JLabel("User"));
+        accountRow.add(networkUserField);
+        accountRow.add(new JLabel("Password"));
+        accountRow.add(networkPasswordField);
+        addRow(clientForm, row++, "Account", accountRow);
         networkPingButton.addActionListener(event -> testNetworkConnection());
         styleSmallButton(networkPingButton);
-        endpointRow.add(networkPingButton);
-        // 自检按钮放在连接四要素之后：先填再测。
-        addRow(clientForm, row++, "Server account", endpointRow);
+        addActionRow(clientForm, row++, networkPingButton);
         addPathRow(clientForm, row++, "Source directory", networkSourceField, true);
-        // 备份参数区：与本地 Backup 页同语义（名称/压缩/增量/加密），快照进 NetworkBackupService。
+        // 备份参数区：与本地 Backup 页同语义（名称/压缩/增量/加密），快照进 NetworkBackupService；同样分两行。
         JPanel settingsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         settingsRow.setOpaque(false);
         settingsRow.add(new JLabel("Name"));
         settingsRow.add(networkNameField);
         settingsRow.add(new JLabel("Compression"));
         settingsRow.add(networkCompressionCombo);
-        settingsRow.add(networkIncrementalCheckBox);
-        settingsRow.add(networkEncryptedCheckBox);
-        settingsRow.add(new JLabel("Passphrase"));
-        settingsRow.add(networkPassphraseField);
         addRow(clientForm, row++, "Backup settings", settingsRow);
+        JPanel protectionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        protectionRow.setOpaque(false);
+        protectionRow.add(networkIncrementalCheckBox);
+        protectionRow.add(networkEncryptedCheckBox);
+        protectionRow.add(new JLabel("Passphrase"));
+        protectionRow.add(networkPassphraseField);
+        addRow(clientForm, row++, "", protectionRow);
         // 动作区：keepGroups 在提交时固定并传给服务器端淘汰。
         JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         actionRow.setOpaque(false);
@@ -659,7 +669,7 @@ public final class BackupFrame extends JFrame {
             @Override protected NetworkBackupService.NetworkBackupResult doInBackground() throws Exception {
                 try (NetworkBackupClient client = connectedClient()) {
                     publish("Network backup started (" + options.compressionType() + (options.encrypted() ? ", encrypted" : "") + ").");
-                    return new NetworkBackupService().backup(client, options, keepGroups);
+                    return networkBackupService.backup(client, options, keepGroups);
                 }
             }
 
@@ -770,7 +780,7 @@ public final class BackupFrame extends JFrame {
             @Override protected RestoreResult doInBackground() throws Exception {
                 try (NetworkBackupClient client = connectedClient()) {
                     publish("Downloading " + archiveName + " ...");
-                    return new NetworkBackupService().restore(client, archiveName, destination, passphrase);
+                    return networkBackupService.restore(client, archiveName, destination, passphrase);
                 }
             }
 
