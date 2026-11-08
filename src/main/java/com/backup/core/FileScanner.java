@@ -128,9 +128,8 @@ public final class FileScanner {
     }
 
     /**
-     * Recognizes pipes, devices and sockets through POSIX type bits when the runtime exposes
-     * them ("unix:mode" on OpenJDK Unix platforms). Returns null for anything unclassifiable
-     * on the current platform.
+     * 特殊文件分类：运行时暴露 POSIX 类型位时（OpenJDK Unix 平台的 "unix:mode" 视图），
+     * 据掩码高位识别管道、设备与套接字；当前平台无法分类的条目返回 null，由调用方跳过并警告。
      */
     private static EntryType classifySpecial(Path path, BasicFileAttributes attrs) {
         if (attrs.isRegularFile() || attrs.isSymbolicLink() || attrs.isDirectory()) return null;

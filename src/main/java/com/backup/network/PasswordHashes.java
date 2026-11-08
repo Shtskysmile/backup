@@ -16,7 +16,6 @@ import java.util.HexFormat;
  * hash/verify 的输入口令在 KeySpec 中用后立即 clearPassword。
  * 慢哈希的工程意义：把"每秒数十亿次猜测"压到"每秒几千次"，盐值防彩虹表。</p>
  */
-/** Salted PBKDF2 password hashing shared by the network user store. */
 public final class PasswordHashes {
     /** 迭代次数与 EncryptionService 保持同一量级（OWASP 推荐区间）。 */
     public static final int ITERATIONS = 210_000;

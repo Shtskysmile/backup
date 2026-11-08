@@ -24,7 +24,7 @@ class BackupServiceTest {
     Path tempDirectory;
 
     @Test
-    /** 用例 zipBackupRestoresFilesAndMetadata：备份编排（增量/隔离/加密/命名） 的具体场景，断言即预期行为。 */
+    /** 全量备份加还原往返：清单条目数、文件内容与旁挂清单文件都正确。 */
     void zipBackupRestoresFilesAndMetadata() throws IOException {
         Path source = Files.createDirectory(tempDirectory.resolve("source"));
         Path destination = Files.createDirectory(tempDirectory.resolve("backups"));
@@ -44,7 +44,7 @@ class BackupServiceTest {
     }
 
     @Test
-    /** 用例 encryptedGzipBackupRequiresTheCorrectPassphrase：备份编排（增量/隔离/加密/命名） 的具体场景，断言即预期行为。 */
+    /** 加密 GZIP：错误口令解密失败抛异常；正确口令还原出原文。 */
     void encryptedGzipBackupRequiresTheCorrectPassphrase() throws IOException {
         Path source = Files.createDirectory(tempDirectory.resolve("source"));
         Path destination = Files.createDirectory(tempDirectory.resolve("backups"));
@@ -63,7 +63,7 @@ class BackupServiceTest {
     }
 
     @Test
-    /** 用例 incrementalBackupContainsOnlyChangedFilesAndDirectories：备份编排（增量/隔离/加密/命名） 的具体场景，断言即预期行为。 */
+    /** 增量归档只含变化文件、其父目录条目与清单；未变的文件绝不入包。 */
     void incrementalBackupContainsOnlyChangedFilesAndDirectories() throws IOException {
         Path source = Files.createDirectory(tempDirectory.resolve("source"));
         Path destination = Files.createDirectory(tempDirectory.resolve("backups"));
@@ -93,7 +93,7 @@ class BackupServiceTest {
     }
 
     @Test
-    /** 用例 destinationCannotBeInsideSource：备份编排（增量/隔离/加密/命名） 的具体场景，断言即预期行为。 */
+    /** 目标目录位于源目录内：备份直接拒绝（防止备份过程自吞源数据）。 */
     void destinationCannotBeInsideSource() throws IOException {
         Path source = Files.createDirectory(tempDirectory.resolve("source"));
         Path destination = Files.createDirectory(source.resolve("backups"));

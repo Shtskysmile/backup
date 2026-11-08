@@ -27,7 +27,7 @@ import static com.backup.testing.FileSystemCapabilities.*;
 class LocalArchiveTest {
     @TempDir Path temp;
 
-    /** 用例 missingHardlinkBaseDoesNotDeleteExistingTargetFile：归档往返与还原安全 的具体场景，断言即预期行为。 */
+    /** 增量只含硬链接条目而基文件缺失：还原报错，且绝不删除或覆盖还原目录里已有的同名文件。 */
     @Test void missingHardlinkBaseDoesNotDeleteExistingTargetFile() throws Exception {
         assumeHardLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
@@ -44,7 +44,7 @@ class LocalArchiveTest {
         assertEquals("keep", Files.readString(out.resolve("b")));
     }
 
-    /** 用例 sameSizeSourceChangeCannotPublishAnUnrestorableArchive：归档往返与还原安全 的具体场景，断言即预期行为。 */
+    /** 扫描后源内容变化（同尺寸绕过尺寸检查）：SHA-256 不符，拒绝发布不可还原的归档。 */
     @Test void sameSizeSourceChangeCannotPublishAnUnrestorableArchive() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path file = Files.writeString(source.resolve("file"), "before");
@@ -54,7 +54,7 @@ class LocalArchiveTest {
         assertThrows(IOException.class, () -> new com.backup.io.ArchiveService().writeZipArchive(source, temp.resolve("changed.zip"), manifest, scanned));
     }
 
-    /** 用例 fullArchiveWithMissingPayloadIsNotReportedAsSuccessfulRestore：归档往返与还原安全 的具体场景，断言即预期行为。 */
+    /** 全量归档缺载荷（清单有条目但包里没有）：还原必须报错而不是假成功。 */
     @Test void fullArchiveWithMissingPayloadIsNotReportedAsSuccessfulRestore() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Files.writeString(source.resolve("file"), "content");
@@ -70,7 +70,7 @@ class LocalArchiveTest {
         return new BackupService().backup(new BackupOptions(source, temp.resolve("backups"), "local", type, false, false, null));
     }
 
-    /** 用例 zipPreservesRelativeAndBrokenSymlinks：归档往返与还原安全 的具体场景，断言即预期行为。 */
+    /** ZIP 往返：相对软链接与断链都按目标字符串原样重建（不解析、不报错）。 */
     @Test void zipPreservesRelativeAndBrokenSymlinks() throws Exception {
         assumeSymbolicLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
@@ -84,7 +84,7 @@ class LocalArchiveTest {
         assertEquals(Path.of("missing"), Files.readSymbolicLink(out.resolve("broken")));
     }
 
-    /** 用例 gzipPreservesHardlinkIdentity：归档往返与还原安全 的具体场景，断言即预期行为。 */
+    /** GZIP 往返：硬链接对还原后仍指向同一 inode（isSameFile 验证）。 */
     @Test void gzipPreservesHardlinkIdentity() throws Exception {
         assumeHardLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
@@ -96,7 +96,7 @@ class LocalArchiveTest {
         assertTrue(Files.isSameFile(out.resolve("first"), out.resolve("second")));
     }
 
-    /** 用例 restoreRefusesExistingSymlinkFileWithoutWritingOutside：归档往返与还原安全 的具体场景，断言即预期行为。 */
+    /** 还原目标位置已有指向外部的符号链接：拒绝覆盖，外部文件内容分毫不动。 */
     @Test void restoreRefusesExistingSymlinkFileWithoutWritingOutside() throws Exception {
         assumeSymbolicLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));
@@ -109,7 +109,7 @@ class LocalArchiveTest {
         assertEquals("unchanged", Files.readString(outside));
     }
 
-    /** 用例 restoreRefusesSymlinkParentWithoutWritingOutside：归档往返与还原安全 的具体场景，断言即预期行为。 */
+    /** 还原路径中间某级是指向外部目录的符号链接：拒绝写入，外部目录不出现任何文件。 */
     @Test void restoreRefusesSymlinkParentWithoutWritingOutside() throws Exception {
         assumeDirectorySymbolicLinks(temp);
         Path source = Files.createDirectories(temp.resolve("source/docs"));
@@ -122,7 +122,7 @@ class LocalArchiveTest {
         assertFalse(Files.exists(outside.resolve("file")));
     }
 
-    /** 用例 replacingExistingHardlinkDoesNotChangeOtherPath：归档往返与还原安全 的具体场景，断言即预期行为。 */
+    /** 原子替换验证：覆盖还原目录中与外部文件互为硬链接的名字，外部硬链接另一端内容不变。 */
     @Test void replacingExistingHardlinkDoesNotChangeOtherPath() throws Exception {
         assumeHardLinks(temp);
         Path source = Files.createDirectory(temp.resolve("source"));

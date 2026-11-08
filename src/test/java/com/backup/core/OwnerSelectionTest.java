@@ -26,7 +26,7 @@ class OwnerSelectionTest {
         return new BackupFilter("", "", "", false, "", owners, null, null, null, null);
     }
 
-    /** 用例 scannerSelectsRecordedOwnerAndKeepsRequiredAncestors：属主筛选 的具体场景，断言即预期行为。 */
+    /** 按真实属主筛选：命中文件与其必需祖先目录被保留，空目录剪除；记录的属主与系统一致。 */
     @Test void scannerSelectsRecordedOwnerAndKeepsRequiredAncestors() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path docs = Files.createDirectory(source.resolve("docs"));
@@ -42,7 +42,7 @@ class OwnerSelectionTest {
         assertEquals(owner, selected.get(1).owner());
     }
 
-    /** 用例 scannerRejectsNonmatchingOwnersAndPrunesUnusedDirectories：属主筛选 的具体场景，断言即预期行为。 */
+    /** 属主条件不匹配任何文件：扫描结果为空（未命中目录与文件全部剪除）。 */
     @Test void scannerRejectsNonmatchingOwnersAndPrunesUnusedDirectories() throws Exception {
         Path source = Files.createDirectory(temp.resolve("source"));
         Path docs = Files.createDirectory(source.resolve("docs"));

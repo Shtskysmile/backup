@@ -21,7 +21,8 @@ import java.util.Properties;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-/** End-to-end checks for the cloud backup flow: TLS, accounts, metadata, increments and retention. */
+/**
+ * 网络备份端到端测试：TLS、账号、元数据、增量与保留策略。
 /**
  * 网络备份端到端集成：起真实 HTTPS 服务器（随机端口）→ 账号 → TLS/认证 →
  * 全量+增量往返 → 加密链 → 服务器端保留 → 整组删除保护 → 账号隔离 →
@@ -78,7 +79,7 @@ class NetworkBackupIntegrationTest {
                 incremental, encrypted, passphrase);
     }
 
-    /** 用例 authenticatedPingAndWrongPasswordFailure：网络备份端到端 的具体场景，断言即预期行为。 */
+    /** 正确凭据 ping 返回 ok 与用户名；错误口令返回 401；未知用户同样被拒绝。 */
     @Test void authenticatedPingAndWrongPasswordFailure() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -96,7 +97,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
-    /** 用例 plainHttpIsRejectedBecauseTheServerSpeaksTlsOnly：网络备份端到端 的具体场景，断言即预期行为。 */
+    /** 服务器只讲 TLS：明文 HTTP 请求直接失败，不存在降级路径。 */
     @Test void plainHttpIsRejectedBecauseTheServerSpeaksTlsOnly() throws Exception {
         NetworkBackupServer running = startServer();
         HttpClient plain = HttpClient.newBuilder().build();
@@ -104,7 +105,7 @@ class NetworkBackupIntegrationTest {
         assertThrows(IOException.class, () -> plain.send(request, HttpResponse.BodyHandlers.ofString()));
     }
 
-    /** 用例 fullThenIncrementalBackupRestoresAcrossServerChain：网络备份端到端 的具体场景，断言即预期行为。 */
+    /** 全量→增量链上传服务器：远端快照与清单可查询；先全量后增量的链式还原内容逐字节正确。 */
     @Test void fullThenIncrementalBackupRestoresAcrossServerChain() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -120,7 +121,7 @@ class NetworkBackupIntegrationTest {
             NetworkBackupService.NetworkBackupResult increment = service.backup(client, options(source, "proj", true, false, null), 0);
         // 第二轮增量：只应含变化的 notes.txt + 新增 extra.txt + 目录。
             assertFalse(increment.full());
-            // Directories always travel with an increment, like the local service.
+            // 与本地语义一致：目录条目始终随增量一起传输（还原端需要 mkdir）。
             assertEquals(3, increment.archivedEntries());
 
             List<NetworkBackupClient.RemoteSnapshot> snapshots = client.listSnapshots();
@@ -145,7 +146,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
-    /** 用例 encryptedArchivesTravelAndRestoreWithThePassphrase：网络备份端到端 的具体场景，断言即预期行为。 */
+    /** 加密归档以 .enc 落到服务器：正确口令还原；错误口令失败且不产出任何内容；同口令后续备份继续增量链。 */
     @Test void encryptedArchivesTravelAndRestoreWithThePassphrase() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -167,7 +168,7 @@ class NetworkBackupIntegrationTest {
                     wrong.getMessage());
             assertFalse(Files.exists(temp.resolve("restored-wrong").resolve("notes.txt")),
                     "A failed decryption must not restore content");
-            // A same-passphrase follow-up continues the encrypted chain incrementally.
+            // 同口令的后续备份应继续加密增量链（口令记忆生效），而不是退回全量。
             Files.writeString(source.resolve("notes.txt"), "classified-2");
             NetworkBackupService.NetworkBackupResult increment = service.backup(client,
                     options(source, "vault", true, true, "pass-phrase".toCharArray()), 0);
@@ -175,7 +176,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
-    /** 用例 serverSideRetentionPrunesWholeOldGroups：网络备份端到端 的具体场景，断言即预期行为。 */
+    /** 12 连备 keepGroups=1：服务器端整组淘汰，只剩最新组（全量+增量）共 2 快照 6 个文件。 */
     @Test void serverSideRetentionPrunesWholeOldGroups() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -199,7 +200,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
-    /** 用例 groupDeleteRemovesHistoryButProtectsTheNewestGroup：网络备份端到端 的具体场景，断言即预期行为。 */
+    /** 删除旧组成功（deleted=1）；删除包含最新快照的组被保护性拒绝。 */
     @Test void groupDeleteRemovesHistoryButProtectsTheNewestGroup() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -214,7 +215,7 @@ class NetworkBackupIntegrationTest {
                 Properties response = client.deleteGroup(first.snapshot().groupId());
                 assertEquals("1", response.getProperty("deleted"));
             } catch (IOException e) {
-                // The newest group is protected; deleting the older one must not hit that guard.
+                // 最新组受保护；删除较旧组不应触发该保护（若触发即测试失败）。
                 fail("Older group delete should succeed: " + e.getMessage());
             }
             assertThrows(IOException.class, () -> client.deleteGroup(second.snapshot().groupId()));
@@ -222,7 +223,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
-    /** 用例 accountsAreIsolatedPerUser：网络备份端到端 的具体场景，断言即预期行为。 */
+    /** 账号目录级隔离：bob 的快照列表为空，下载 alice 的归档失败。 */
     @Test void accountsAreIsolatedPerUser() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -240,7 +241,7 @@ class NetworkBackupIntegrationTest {
         }
     }
 
-    /** 用例 tamperedCommitPayloadIsRejected：网络备份端到端 的具体场景，断言即预期行为。 */
+    /** 伪造令牌与清单不匹配的提交被拒绝；同名归档的第二次提交不能覆盖已存快照。 */
     @Test void tamperedCommitPayloadIsRejected() throws Exception {
         NetworkBackupServer running = startServer();
         NetworkUsers.ensureUser(running.storageRoot(), "alice", "secret".toCharArray());
@@ -248,11 +249,11 @@ class NetworkBackupIntegrationTest {
         NetworkBackupService service = new NetworkBackupService();
         try (NetworkBackupClient client = connect(running, "alice", "secret".toCharArray())) {
             NetworkBackupService.NetworkBackupResult result = service.backup(client, options(source, "audit", false, false, null), 0);
-            // Unknown tokens and mismatched manifests must be refused.
+            // 伪造令牌与清单不匹配的提交都必须被拒绝。
             assertThrows(IOException.class, () -> client.commit("bogus-token", "", 0));
             Path userDir = running.storageRoot().resolve("users").resolve("alice");
             assertTrue(Files.exists(userDir.resolve(result.archiveName())));
-            // A second commit for the same archive name cannot overwrite the stored snapshot.
+            // 同名归档的第二次提交不允许覆盖已存储的快照（发布幂等性防护）。
             assertThrows(IOException.class, () -> {
                 String token = client.upload(temp.resolve("notes.txt"));
                 client.commit(token, "", 0);

@@ -32,7 +32,7 @@ public final class BackupApplication {
                 try {
                     UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
                 } catch (Exception ignoredFallback) {
-                    // The default Swing look and feel is a fine fallback.
+                    // 连系统外观都失败时，保留 Swing 默认外观即可正常使用。
                 }
             }
             BackupFrame frame = new BackupFrame();

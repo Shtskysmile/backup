@@ -25,12 +25,6 @@ import java.util.concurrent.Executors;
 import java.util.stream.Stream;
 
 /**
- * HTTPS backup receiver. Users authenticate with Basic credentials against the PBKDF2 account
- * store; every account maps to an isolated directory that mirrors the local backup destination
- * layout (archives, manifest sidecars, snapshot catalog and compatibility latest manifest).
- * Request and response bodies other than raw archive payloads are java.util.Properties text.
- */
-/**
  * HTTPS 备份接收服务：把单机备份软件扩展为局域网网盘。
  *
  * <p>身份与安全：首次启动用 JDK keytool 自动生成自签名证书（PKCS12，SAN 含
@@ -290,7 +284,7 @@ public final class NetworkBackupServer implements AutoCloseable {
                         BackupCatalog.Snapshot snapshot = readSnapshotIndex(file);
                         snapshots.add(Map.entry(snapshot, Files.size(userDirectory.resolve(snapshot.archiveName()))));
                     } catch (IOException | RuntimeException ignored) {
-                        // Unreadable records are invisible to listings but never deleted here.
+                        // 读不出的索引在列表中不可见，但这里也绝不删除（保守原则）。
                     }
                 }
             }
@@ -555,7 +549,7 @@ public final class NetworkBackupServer implements AutoCloseable {
         // 错误体结构固定：{error=消息}——客户端 failure() 据此提取人话。
             sendProperties(exchange, status, response);
         } catch (IOException ignored) {
-            // The connection is gone; nothing further to report.
+            // 连接已断开，错误体发不出去也无事可做。
         }
     }
 

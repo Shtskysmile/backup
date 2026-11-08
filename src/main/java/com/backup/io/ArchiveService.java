@@ -231,7 +231,6 @@ public final class ArchiveService {
         }
     }
 
-    /** Devices are recreated with mknod when the platform and privileges allow; sockets are recorded only. */
     /**
      * 设备/套接字处理：套接字只记录不重建（无监听进程的 socket 文件无意义）；
      * 设备用 mknod c/b 主 次 重建（通常需要 root），并以 isSpecialType 复核类型位，
@@ -418,8 +417,8 @@ public final class ArchiveService {
         if (symlink && !entry.permissions().isBlank()) attempt(entry, "symbolic-link permissions", warnings,
                 () -> symbolicLinkPermissions.restore(out, PosixFilePermissions.fromString(entry.permissions())));
         if (fifo) {
-            // JDK POSIX permission and basic time setters may open a FIFO and block.
-            // Permissions were supplied to mkfifo before publishing this entry.
+            // JDK 的 POSIX 权限/基本时间 setter 可能打开 FIFO 导致阻塞：权限已在 mkfifo 前给足，
+            // 此处只恢复时间戳（FifoSupport 同样全程不打开数据流）。
             fifoSupport.restoreTimes(entry, out, warnings);
             return;
         }
@@ -463,7 +462,7 @@ public final class ArchiveService {
             if (Files.isSymbolicLink(current)) throw new IOException("Symbolic link in restore path: " + current);
             current = current.resolve(component);
         }
-        // The final component is checked separately according to the entry's type.
+        // 最后一级组件按条目类型单独校验（文件/目录/链接各有各的拒覆盖规则）。
         if (Files.isSymbolicLink(out.getParent())) throw new IOException("Symbolic link in restore path: " + out.getParent());
     }
 

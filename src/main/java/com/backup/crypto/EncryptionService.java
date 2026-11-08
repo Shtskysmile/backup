@@ -108,9 +108,9 @@ public final class EncryptionService {
             try (CipherInputStream cipherIn = new CipherInputStream(headerIn, cipher);
             // 流式解密：tag 在流末尾校验——读到最后一字节才知道口令/完整性是否通过。
                  OutputStream outputStream = Files.newOutputStream(output)) {
-                cipherIn.transferTo(outputStream);
-            } catch (IOException streamFailure) {
-                // CipherInputStream reports authentication failures as plain IOExceptions.
+                 cipherIn.transferTo(outputStream);
+             } catch (IOException streamFailure) {
+                 // JDK 已知行为：CipherInputStream 把 GCM 认证失败包装成普通 IOException 抛出。
                 if (streamFailure.getCause() instanceof GeneralSecurityException
                         || streamFailure.getMessage() != null && streamFailure.getMessage().contains("Tag mismatch")) {
                     throw new IOException("Unable to decrypt backup. Check the passphrase.", streamFailure);
@@ -135,7 +135,6 @@ public final class EncryptionService {
         return bytes;
     }
 
-    /** 派生密钥：PBKDF2(口令, 盐, 210000, 256bit) → AES 密钥；密钥字节与口令数组用后即清。 */
     /** 组装 Cipher：PBKDF2 派生 256 位密钥 → AES/GCM/NoPadding（128 位认证标签）。 */
     private Cipher cipher(int mode, char[] passphrase, byte[] salt, byte[] iv) throws GeneralSecurityException {
         SecretKeySpec key = deriveKey(passphrase, salt);

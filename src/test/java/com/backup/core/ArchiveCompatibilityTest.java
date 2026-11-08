@@ -10,7 +10,6 @@ import java.util.zip.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static com.backup.testing.FileSystemCapabilities.*;
 
-/** Fixtures deliberately do not use the current archive or manifest writers. */
 /**
  * v1 旧格式兼容与对抗测试：手写 v1 ZIP/GZIP 样本（不经当前写入器）验证可读性；
  * 恶意清单（穿越路径/重复路径/非法数字/重复载荷）必须在写入任何文件前被拒绝。
@@ -69,7 +68,7 @@ class ArchiveCompatibilityTest {
         return archive;
     }
 
-    /** 用例 restoresHandcraftedVersionOneZipWithoutInventingAbsentTimes：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
+    /** 手写 v1 ZIP 可还原：内容与修改时间正确；v1 缺失的访问/创建时间保持 null（绝不伪造时间戳）。 */
     @Test void restoresHandcraftedVersionOneZipWithoutInventingAbsentTimes() throws Exception {
         Path out = temp.resolve("out");
         BackupManifest result = new ArchiveService().restore(zip("old.zip", manifest("ZIP", "old.txt"), "old.txt"), out);
@@ -80,7 +79,7 @@ class ArchiveCompatibilityTest {
         assertNull(result.entries().getFirst().creationMillis());
     }
 
-    /** 用例 restoresHandcraftedVersionOneGzip：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
+    /** 手写 v1 GZIP 容器可还原：内容与时间正确，压缩类型识别为 GZIP。 */
     @Test void restoresHandcraftedVersionOneGzip() throws Exception {
         Path out = temp.resolve("out");
         BackupManifest result = new ArchiveService().restore(gzip("old.gz", manifest("GZIP", "old.txt"), "old.txt", 1), out);
@@ -89,7 +88,7 @@ class ArchiveCompatibilityTest {
         assertEquals(CompressionType.GZIP, result.compressionType());
     }
 
-    /** 用例 traversalManifestCannotOverwriteOutsideFile：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
+    /** 恶意清单带 ../outside：还原在任何写入前被拒绝，外部哨兵文件原样。 */
     @Test void traversalManifestCannotOverwriteOutsideFile() throws Exception {
         Path sentinel = Files.writeString(temp.resolve("outside"), "keep");
         Path archive = zip("hostile.zip", manifest("ZIP", "../outside"), "../outside");
@@ -97,7 +96,7 @@ class ArchiveCompatibilityTest {
         assertEquals("keep", Files.readString(sentinel));
     }
 
-    /** 用例 duplicatePayloadIsRejectedEvenWhenManifestCountPermitsTwoRecords：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
+    /** 同一载荷在包里出现两次（清单数量字段允许）：按重复路径拒绝，绝不覆盖已写内容。 */
     @Test void duplicatePayloadIsRejectedEvenWhenManifestCountPermitsTwoRecords() throws Exception {
         String manifest = manifest("GZIP", "old.txt").replace("entry.count=1", "entry.count=2")
                 + "entry.1.path=other.txt\nentry.1.size=" + CONTENT.length + "\n";
@@ -106,7 +105,7 @@ class ArchiveCompatibilityTest {
         assertTrue(error.getMessage().contains("duplicate"));
     }
 
-    /** 用例 duplicateManifestPathsAreRejectedBeforePayloadWrites：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
+    /** 清单本身含重复路径：在写任何文件之前拒绝（还原目录保持为空）。 */
     @Test void duplicateManifestPathsAreRejectedBeforePayloadWrites() throws Exception {
         String text = manifest("ZIP", "old.txt").replace("entry.count=1", "entry.count=2")
                 + "entry.1.path=old.txt\nentry.1.size=" + CONTENT.length + "\n";
@@ -115,7 +114,7 @@ class ArchiveCompatibilityTest {
         assertFalse(Files.exists(out.resolve("old.txt")));
     }
 
-    /** 用例 malformedManifestReportsIoFailureBeforePayloadWrites：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
+    /** 清单字段非法（size=not-a-number）：解析期失败，载荷一个字节都不落盘。 */
     @Test void malformedManifestReportsIoFailureBeforePayloadWrites() throws Exception {
         Path out = temp.resolve("out");
         Path archive = zip("malformed.zip", manifest("ZIP", "old.txt").replace("entry.0.size=" + CONTENT.length, "entry.0.size=not-a-number"), "old.txt");
@@ -123,9 +122,9 @@ class ArchiveCompatibilityTest {
         assertFalse(Files.exists(out.resolve("old.txt")));
     }
 
-    /** 用例 encryptedZipPreservesLinks：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
+    /** 加密 ZIP 往返：硬链接同 inode、相对与断链软链接的目标字符串原样保留。 */
     @Test void encryptedZipPreservesLinks() throws Exception { encryptedLinks(CompressionType.ZIP); }
-    /** 用例 encryptedGzipPreservesLinks：v1 归档兼容与恶意清单对抗 的具体场景，断言即预期行为。 */
+    /** 加密 GZIP 往返：链接保真与压缩格式无关，行为与 ZIP 一致。 */
     @Test void encryptedGzipPreservesLinks() throws Exception { encryptedLinks(CompressionType.GZIP); }
 
     private void encryptedLinks(CompressionType compression) throws Exception {
