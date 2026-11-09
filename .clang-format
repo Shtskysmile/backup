@@ -1,0 +1,26 @@
+---
+Language: Java
+BasedOnStyle: LLVM
+
+# Match the project's four-space Java indentation.
+IndentWidth: 4
+ContinuationIndentWidth: 8
+TabWidth: 4
+UseTab: Never
+
+# Keep declarations and control blocks in the project's usual attached-brace style.
+BreakBeforeBraces: Attach
+ColumnLimit: 120
+
+# Keep short control statements readable and avoid compact one-line methods.
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+
+# Preserve import grouping and avoid sorting imports unexpectedly.
+SortIncludes: Never
+
+# Keep constructor calls and method arguments reasonably compact.
+BinPackArguments: false
+BinPackParameters: false
+AlignAfterOpenBracket: Align

@@ -42,6 +42,7 @@ build/
 /decrypted/
 /encrypted/
 /testfilefolder/
+/network/
+/network_decrypted/
 /out/
-# Generated demo video (about 23 MB): kept out of the Git history on purpose
-/presentation/*.mp4
+/presentation/

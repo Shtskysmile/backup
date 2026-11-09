@@ -37,25 +37,30 @@ public final class FileScanner {
      */
     public List<BackupEntry> scan(Path root, BackupFilter filter, Consumer<String> warnings) throws IOException {
         Path normalizedRoot = root.toRealPath();
-        if (!Files.isDirectory(normalizedRoot)) throw new IOException("Source is not a directory: " + root);
+        if (!Files.isDirectory(normalizedRoot))
+            throw new IOException("Source is not a directory: " + root);
         Map<String, RawEntry> raw = new TreeMap<>();
         Files.walkFileTree(normalizedRoot, new SimpleFileVisitor<>() {
             // 目录前置访问：根目录本身不入清单；其余目录先过排除规则（整树剪枝），再采集。
-            @Override public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
                 if (!dir.equals(normalizedRoot)) {
                     String relative = relative(normalizedRoot, dir);
-                    if (filter.excludesDirectory(relative)) return FileVisitResult.SKIP_SUBTREE;
+                    if (filter.excludesDirectory(relative))
+                        return FileVisitResult.SKIP_SUBTREE;
                     raw.put(relative, capture(dir, relative, attrs));
                 }
                 return FileVisitResult.CONTINUE;
             }
             // 文件/特殊文件访问：无法分类的跳过并警告；可分类的先采集再过筛选（属主筛选需要属主）。
-            @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                 String relative = relative(normalizedRoot, file);
                 RawEntry rawEntry = capture(file, relative, attrs);
                 if (rawEntry.type() == null) {
                     warnings.accept("Skipped unsupported special file: " + relative);
-                } else if (filter.matches(relative, rawEntry.size(), attrs.lastModifiedTime().toMillis(), rawEntry.owner())) {
+                } else if (filter.matches(
+                                   relative, rawEntry.size(), attrs.lastModifiedTime().toMillis(), rawEntry.owner())) {
                     raw.put(relative, rawEntry);
                 }
                 return FileVisitResult.CONTINUE;
@@ -67,7 +72,10 @@ public final class FileScanner {
         for (RawEntry entry : raw.values()) {
             if (entry.type() != EntryType.DIRECTORY) {
                 Path parent = Path.of(entry.relative()).getParent();
-                while (parent != null) { needed.add(parent.toString().replace('\\', '/')); parent = parent.getParent(); }
+                while (parent != null) {
+                    needed.add(parent.toString().replace('\\', '/'));
+                    parent = parent.getParent();
+                }
             }
         }
         Map<Object, BackupEntry> byIdentity = new HashMap<>();
@@ -76,34 +84,54 @@ public final class FileScanner {
         for (RawEntry rawEntry : raw.values()) {
             BasicFileAttributes attrs = rawEntry.attrs();
             EntryType type = rawEntry.type();
-            if (attrs.isDirectory() && !filter.isUnrestricted() && !needed.contains(rawEntry.relative())) continue;
-        // 受限筛选下的空目录剪枝：保留命中条目的祖先链，丢弃无子项目录。
+            if (attrs.isDirectory() && !filter.isUnrestricted() && !needed.contains(rawEntry.relative()))
+                continue;
+            // 受限筛选下的空目录剪枝：保留命中条目的祖先链，丢弃无子项目录。
             String target = "", hash = "";
-            if (type == EntryType.SYMBOLIC_LINK) target = Files.readSymbolicLink(rawEntry.path()).toString();
+            if (type == EntryType.SYMBOLIC_LINK)
+                target = Files.readSymbolicLink(rawEntry.path()).toString();
             if (type == EntryType.FILE) {
                 // 硬链接归并：fileKey 是文件系统级身份。第二次出现同一身份时不再读盘算哈希，
                 // 只记录"指向第一个名字"——同一内容零重复 I/O，且还原时可重建链接。
                 // Windows 的 fileKey() 返回 null → 每个名字各自成普通文件并警告（降级）。
                 BackupEntry first = attrs.fileKey() == null ? null : byIdentity.get(attrs.fileKey());
-                if (first != null) { type = EntryType.HARD_LINK; target = first.relativePath(); hash = first.sha256(); }
-                else {
+                if (first != null) {
+                    type = EntryType.HARD_LINK;
+                    target = first.relativePath();
+                    hash = first.sha256();
+                } else {
                     hash = HashUtils.sha256(rawEntry.path());
-                    if (attrs.fileKey() == null) warnings.accept("Hardlink identity unavailable; stored as ordinary file: " + rawEntry.relative());
+                    if (attrs.fileKey() == null)
+                        warnings.accept("Hardlink identity unavailable; stored as ordinary file: " +
+                                        rawEntry.relative());
                 }
             }
             // 设备条目把"主:次"设备号放进 linkTarget 字段（清单协议复用，见 validateManifest 的白名单校验）。
-            if (type == EntryType.CHARACTER_DEVICE || type == EntryType.BLOCK_DEVICE) target = rawEntry.deviceTarget();
-            BackupEntry entry = new BackupEntry(rawEntry.relative(), attrs.isDirectory(), rawEntry.size(),
-                    attrs.lastModifiedTime().toMillis(), hash, rawEntry.permissions(), rawEntry.owner(), rawEntry.group(),
-                    type, target, attrs.lastAccessTime().toMillis(), attrs.creationTime().toMillis());
-            if (type == EntryType.FILE && attrs.fileKey() != null) byIdentity.put(attrs.fileKey(), entry);
+            if (type == EntryType.CHARACTER_DEVICE || type == EntryType.BLOCK_DEVICE)
+                target = rawEntry.deviceTarget();
+            BackupEntry entry = new BackupEntry(rawEntry.relative(),
+                                                attrs.isDirectory(),
+                                                rawEntry.size(),
+                                                attrs.lastModifiedTime().toMillis(),
+                                                hash,
+                                                rawEntry.permissions(),
+                                                rawEntry.owner(),
+                                                rawEntry.group(),
+                                                type,
+                                                target,
+                                                attrs.lastAccessTime().toMillis(),
+                                                attrs.creationTime().toMillis());
+            if (type == EntryType.FILE && attrs.fileKey() != null)
+                byIdentity.put(attrs.fileKey(), entry);
             result.add(entry);
         }
         return result;
     }
 
     /** 相对路径统一用 / 分隔（清单协议跨平台稳定的基石）。 */
-    private static String relative(Path root, Path path) { return root.relativize(path).toString().replace('\\', '/'); }
+    private static String relative(Path root, Path path) {
+        return root.relativize(path).toString().replace('\\', '/');
+    }
 
     /**
      * 单条目采集：属主/组/权限（POSIX 优先，Windows 退化为属主视图）、
@@ -112,18 +140,26 @@ public final class FileScanner {
     private RawEntry capture(Path path, String relative, BasicFileAttributes attrs) throws IOException {
         String permissions = "", owner = "", group = "";
         try {
-            PosixFileAttributes posix = Files.readAttributes(path, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            permissions = PosixFilePermissions.toString(posix.permissions()); owner = posix.owner().getName(); group = posix.group().getName();
+            PosixFileAttributes posix =
+                    Files.readAttributes(path, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            permissions = PosixFilePermissions.toString(posix.permissions());
+            owner = posix.owner().getName();
+            group = posix.group().getName();
         } catch (UnsupportedOperationException ignored) {
-            FileOwnerAttributeView view = Files.getFileAttributeView(path, FileOwnerAttributeView.class, LinkOption.NOFOLLOW_LINKS);
-            if (view != null) owner = view.getOwner().getName();
+            FileOwnerAttributeView view =
+                    Files.getFileAttributeView(path, FileOwnerAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+            if (view != null)
+                owner = view.getOwner().getName();
         }
-        EntryType type = attrs.isDirectory() ? EntryType.DIRECTORY
-                : attrs.isSymbolicLink() ? EntryType.SYMBOLIC_LINK
-                : attrs.isRegularFile() ? EntryType.FILE : classifySpecial(path, attrs);
-        String deviceTarget = type == EntryType.CHARACTER_DEVICE || type == EntryType.BLOCK_DEVICE
-                ? deviceNumber(path) : "";
-        long size = attrs.isDirectory() || (type != null && type != EntryType.FILE && type != EntryType.SYMBOLIC_LINK) ? 0 : attrs.size();
+        EntryType type = attrs.isDirectory()      ? EntryType.DIRECTORY
+                         : attrs.isSymbolicLink() ? EntryType.SYMBOLIC_LINK
+                         : attrs.isRegularFile()  ? EntryType.FILE
+                                                  : classifySpecial(path, attrs);
+        String deviceTarget =
+                type == EntryType.CHARACTER_DEVICE || type == EntryType.BLOCK_DEVICE ? deviceNumber(path) : "";
+        long size = attrs.isDirectory() || (type != null && type != EntryType.FILE && type != EntryType.SYMBOLIC_LINK)
+                            ? 0
+                            : attrs.size();
         return new RawEntry(path, relative, attrs, size, permissions, owner, group, type, deviceTarget);
     }
 
@@ -132,9 +168,11 @@ public final class FileScanner {
      * 据掩码高位识别管道、设备与套接字；当前平台无法分类的条目返回 null，由调用方跳过并警告。
      */
     private static EntryType classifySpecial(Path path, BasicFileAttributes attrs) {
-        if (attrs.isRegularFile() || attrs.isSymbolicLink() || attrs.isDirectory()) return null;
+        if (attrs.isRegularFile() || attrs.isSymbolicLink() || attrs.isDirectory())
+            return null;
         Integer mode = unixMode(path);
-        if (mode == null) return null;
+        if (mode == null)
+            return null;
         return switch (mode & TYPE_MASK) {
             case 0010000 -> EntryType.FIFO;
             case 0020000 -> EntryType.CHARACTER_DEVICE;
@@ -162,10 +200,12 @@ public final class FileScanner {
     private static String deviceNumber(Path path) {
         try {
             Object value = Files.getAttribute(path, "unix:rdev", LinkOption.NOFOLLOW_LINKS);
-            if (!(value instanceof Long rdev)) return "";
+            if (!(value instanceof Long rdev))
+                return "";
             long major = IS_MAC ? (rdev >> 24) & 0xff : ((rdev >> 8) & 0xfff) | ((rdev >> 32) & ~0xfffL);
             long minor = IS_MAC ? rdev & 0xffffff : (rdev & 0xff) | ((rdev >> 12) & ~0xffL);
-            if (major < 0 || minor < 0 || major > 65535 || minor > 65535) return "";
+            if (major < 0 || minor < 0 || major > 65535 || minor > 65535)
+                return "";
             return major + ":" + minor;
         } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
             return "";
@@ -173,6 +213,13 @@ public final class FileScanner {
     }
 
     /** 扫描期中间态：原始路径 + 规范化后的分类结果 + 记录尺寸，第二遍构建直接消费。 */
-    private record RawEntry(Path path, String relative, BasicFileAttributes attrs, long size,
-                            String permissions, String owner, String group, EntryType type, String deviceTarget) {}
+    private record RawEntry(Path path,
+                            String relative,
+                            BasicFileAttributes attrs,
+                            long size,
+                            String permissions,
+                            String owner,
+                            String group,
+                            EntryType type,
+                            String deviceTarget) {}
 }
